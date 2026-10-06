@@ -1,0 +1,160 @@
+import { Lesson, ScheduleData } from '../types';
+
+export const DAYS_CONFIG = [
+  { key: 'mon', label: 'Понедельник', short: 'Пн' },
+  { key: 'tue', label: 'Вторник', short: 'Вт' },
+  { key: 'wed', label: 'Среда', short: 'Ср' },
+  { key: 'thu', label: 'Четверг', short: 'Чт' },
+  { key: 'fri', label: 'Пятница', short: 'Пт' },
+] as const;
+
+export const INITIAL_LESSONS: Lesson[] = [
+  // Понедельник
+  {
+    id: 'l-1',
+    day: 'mon',
+    startTime: '09:30',
+    endTime: '10:15',
+    subject: 'Алгебра',
+    teacherName: 'Елена Сергеевна',
+    isFlexible: false,
+    meetingUrl: 'https://meet.google.com/abc-math-room',
+    homework: 'Номера 412–415',
+  },
+  {
+    id: 'l-2',
+    day: 'mon',
+    startTime: '11:00',
+    endTime: '11:45',
+    subject: 'История',
+    teacherName: 'Илья Андреевич',
+    isFlexible: true,
+    meetingUrl: 'https://zoom.us/j/1239874560',
+    homework: 'Параграф 14, вопросы устно',
+  },
+  {
+    id: 'l-3',
+    day: 'mon',
+    startTime: '13:00',
+    endTime: '13:45',
+    subject: 'Информатика',
+    teacherName: 'Максим Игоревич',
+    isFlexible: true,
+    meetingUrl: 'https://discord.gg/coding-school-room',
+    homework: 'Задачи в Яндекс.Контесте',
+  },
+
+  // Вторник
+  {
+    id: 'l-4',
+    day: 'tue',
+    startTime: '11:30',
+    endTime: '12:15',
+    subject: 'Английский язык',
+    teacherName: 'Анна Викторовна',
+    isFlexible: false,
+    meetingUrl: 'https://meet.google.com/eng-speaking-club',
+    homework: 'Unit 4 Vocabulary + эссе',
+  },
+  {
+    id: 'l-5',
+    day: 'tue',
+    startTime: '15:30',
+    endTime: '16:15',
+    subject: 'Физика',
+    teacherName: 'Дмитрий Алексеевич',
+    isFlexible: true,
+    status: 'rescheduled',
+    statusNote: 'Перенесено с 14:00',
+    meetingUrl: 'https://zoom.us/j/9876543210',
+    homework: 'Задачи 14-18 на импульс',
+  },
+
+  // Среда
+  {
+    id: 'l-6',
+    day: 'wed',
+    startTime: '09:30',
+    endTime: '10:15',
+    subject: 'Геометрия',
+    teacherName: 'Елена Сергеевна',
+    isFlexible: false,
+    meetingUrl: 'https://meet.google.com/abc-math-room',
+    homework: 'Теорема о трёх перпендикулярах',
+  },
+  {
+    id: 'l-7',
+    day: 'wed',
+    startTime: '13:00',
+    endTime: '13:45',
+    subject: 'Русский язык',
+    teacherName: 'Татьяна Николаевна',
+    isFlexible: false,
+    meetingUrl: 'https://telemost.yandex.ru/j/8492049102',
+    homework: 'Упражнение 204',
+  },
+
+  // Четверг
+  {
+    id: 'l-8',
+    day: 'thu',
+    startTime: '11:30',
+    endTime: '12:15',
+    subject: 'Английский язык',
+    teacherName: 'Анна Викторовна',
+    isFlexible: false,
+    meetingUrl: 'https://meet.google.com/eng-speaking-club',
+    homework: 'Listening Practice Part 2',
+  },
+  {
+    id: 'l-9',
+    day: 'thu',
+    startTime: '15:00',
+    endTime: '15:45',
+    subject: 'Информатика',
+    teacherName: 'Максим Игоревич',
+    isFlexible: true,
+    meetingUrl: 'https://discord.gg/coding-school-room',
+  },
+
+  // Пятница
+  {
+    id: 'l-10',
+    day: 'fri',
+    startTime: '09:30',
+    endTime: '10:15',
+    subject: 'Алгебра',
+    teacherName: 'Елена Сергеевна',
+    isFlexible: false,
+    meetingUrl: 'https://meet.google.com/abc-math-room',
+    homework: 'Вариант 12, часть 2',
+  },
+  {
+    id: 'l-11',
+    day: 'fri',
+    startTime: '13:00',
+    endTime: '13:45',
+    subject: 'Литература',
+    teacherName: 'Татьяна Николаевна',
+    isFlexible: false,
+    meetingUrl: 'https://telemost.yandex.ru/j/8492049102',
+    homework: 'Главы 4-7, тезисы',
+  },
+  {
+    id: 'l-12',
+    day: 'fri',
+    startTime: '16:00',
+    endTime: '16:45',
+    subject: 'Физика',
+    teacherName: 'Дмитрий Алексеевич',
+    isFlexible: true,
+    meetingUrl: 'https://zoom.us/j/9876543210',
+  },
+];
+
+export const INITIAL_DATA: ScheduleData = {
+  version: 1,
+  updatedAt: new Date().toISOString(),
+  adminPin: '1234',
+  lessons: INITIAL_LESSONS,
+};
