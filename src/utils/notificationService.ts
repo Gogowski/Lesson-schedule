@@ -152,7 +152,9 @@ export function checkLessonNotifications(lessons: Lesson[]): void {
           : `через ${minutesLeft} мин`;
 
         sendLocalNotification(`Скоро урок: ${lesson.subject}`, {
-          body: `Начало ${timeText} в ${lesson.startTime} • ${lesson.teacherName}`,
+          body: lesson.teacherName
+            ? `Начало ${timeText} в ${lesson.startTime} • ${lesson.teacherName}`
+            : `Начало ${timeText} в ${lesson.startTime}`,
           tag: `lesson-alert-${lesson.id}-${todayKeyStr}`,
         });
 

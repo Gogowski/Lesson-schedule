@@ -431,12 +431,15 @@ export default function App() {
       return;
     }
     if (supabase) {
-      const { error } = await supabase.from('schedules').upsert({
+      const { error } = await supabase.from('schedules').insert({
         id: 'current',
         version: 1,
         updated_at: new Date().toISOString(),
         lessons: importedLessons,
       });
+      if (error?.code === '23505') {
+        throw new Error('Расписание уже создали в другой вкладке. Обновите страницу и проверьте его.');
+      }
       if (error) throw error;
       setLessons(importedLessons);
       setScheduleVersion(1);
@@ -664,7 +667,15 @@ export default function App() {
       );
     }
     if (scheduleMissing) {
-      return <CloudScheduleSetup isDark={isDark} isEditor={isAdmin} onImport={handleImportSchedule} onLogout={handleLogout} />;
+      return (
+        <CloudScheduleSetup
+          isDark={isDark}
+          isEditor={isAdmin}
+          onCreateEmpty={() => handleImportSchedule([])}
+          onImport={handleImportSchedule}
+          onLogout={handleLogout}
+        />
+      );
     }
   }
 
@@ -920,11 +931,13 @@ export default function App() {
                     }`}>
                       {lesson.subject}
                     </h2>
-                    <div className={`mt-1 text-xs ${
-                      isDark ? 'text-neutral-400' : 'text-neutral-500'
-                    }`}>
-                      <span className="font-medium">{lesson.teacherName}</span>
-                    </div>
+                    {lesson.teacherName.trim() && (
+                      <div className={`mt-1 text-xs ${
+                        isDark ? 'text-neutral-400' : 'text-neutral-500'
+                      }`}>
+                        <span className="font-medium">{lesson.teacherName}</span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Status Note */}
@@ -992,10 +1005,23 @@ export default function App() {
           <div className={`py-20 text-center rounded-3xl p-6 shadow-xs transition-colors ${
             isDark ? 'bg-neutral-900' : 'bg-white'
           }`}>
-            <p className="text-base font-display font-bold">Уроков нет</p>
-            <p className={`text-xs mt-1 ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>
-              Отличный день для отдыха или самоподготовки
+            <p className="text-base font-display font-bold">
+              {lessons.length === 0 ? 'Расписание пока пустое' : 'Уроков нет'}
             </p>
+            <p className={`text-xs mt-1 ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+              {lessons.length === 0
+                ? isAdmin ? 'Добавьте первое занятие, и оно появится здесь у обоих пользователей.' : 'Владелец пока не добавил занятия.'
+                : 'Отличный день для отдыха или самоподготовки'}
+            </p>
+            {isAdmin && lessons.length === 0 && (
+              <button
+                type="button"
+                onClick={() => handleOpenAdd(activeDay === 'all' ? 'mon' : activeDay)}
+                className={`mt-5 rounded-xl px-4 py-2.5 text-xs font-semibold ${isDark ? 'bg-white text-neutral-900' : 'bg-neutral-900 text-white'}`}
+              >
+                Добавить первое занятие
+              </button>
+            )}
           </div>
         )}
       </main>
@@ -1037,6 +1063,7 @@ export default function App() {
         onClose={() => setIsMenuOpen(false)}
         isAdmin={isAdmin}
         isCloudMode={cloudConfigured}
+        currentLessons={lessons}
         onExportBackup={handleExportBackup}
         onImportBackup={handleRestoreBackup}
         onOpenPinModal={() => setIsPinModalOpen(true)}

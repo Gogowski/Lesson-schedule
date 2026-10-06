@@ -135,7 +135,7 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!subject.trim() || !teacherName.trim()) return;
+    if (!subject.trim()) return;
 
     if (!initialLesson) {
       const match = existingLessons.find(
@@ -409,14 +409,13 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
 
               <div>
                 <span className={`block text-xs font-semibold mb-1 ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
-                  Учитель
+                  Учитель (необязательно)
                 </span>
                 <input
                   type="text"
                   value={teacherName}
                   onChange={(e) => setTeacherName(e.target.value)}
                   placeholder="Имя преподавателя"
-                  required
                   className={`w-full px-3.5 py-2.5 rounded-2xl text-base focus:outline-none focus:ring-2 ${
                     isDark 
                       ? 'bg-neutral-800 text-white placeholder:text-neutral-500 focus:ring-white' 

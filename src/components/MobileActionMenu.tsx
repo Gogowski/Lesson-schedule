@@ -9,6 +9,7 @@ interface MobileActionMenuProps {
   onClose: () => void;
   isAdmin: boolean;
   isCloudMode: boolean;
+  currentLessons: Lesson[];
   onExportBackup: () => void;
   onImportBackup: (lessons: Lesson[]) => Promise<void>;
   onOpenPinModal: () => void;
@@ -27,6 +28,7 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
   onClose,
   isAdmin,
   isCloudMode,
+  currentLessons,
   onExportBackup,
   onImportBackup,
   onOpenPinModal,
@@ -47,6 +49,9 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
   const [testSent, setTestSent] = useState(false);
   const [notifError, setNotifError] = useState<string | null>(null);
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
+  const [backupError, setBackupError] = useState(false);
+  const [pendingImportLessons, setPendingImportLessons] = useState<Lesson[] | null>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
   const backupInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
@@ -100,15 +105,59 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
     const file = input.files?.[0];
     if (!file) return;
     setBackupMessage(null);
+    setBackupError(false);
+    setPendingImportLessons(null);
     try {
       const lessons = parseLessonsJson(await file.text());
-      if (!window.confirm(`Заменить текущее расписание на данные из файла (${lessons.length} уроков)?`)) return;
-      await onImportBackup(lessons);
-      setBackupMessage('Расписание восстановлено.');
+      setPendingImportLessons(lessons);
     } catch (error) {
       setBackupMessage(error instanceof Error ? error.message : 'Не удалось восстановить расписание.');
+      setBackupError(true);
     } finally {
       input.value = '';
+    }
+  };
+
+  const applyImportedLessons = async (mode: 'add' | 'replace') => {
+    if (!pendingImportLessons || backupBusy) return;
+
+    let nextLessons = pendingImportLessons;
+    let addedCount = 0;
+    if (mode === 'add') {
+      const knownIds = new Set(currentLessons.map((lesson) => lesson.id));
+      const additions = pendingImportLessons.filter((lesson) => {
+        if (knownIds.has(lesson.id)) return false;
+        knownIds.add(lesson.id);
+        return true;
+      });
+      if (additions.length === 0) {
+        setBackupMessage('В файле нет новых занятий: все ID уже есть в расписании.');
+        setBackupError(false);
+        return;
+      }
+      if (currentLessons.length + additions.length > 100) {
+        setBackupMessage('После добавления получится больше 100 занятий. Удалите часть занятий или замените расписание.');
+        setBackupError(true);
+        return;
+      }
+      addedCount = additions.length;
+      nextLessons = [...currentLessons, ...additions];
+    } else if (!window.confirm(`Заменить текущее расписание на данные из файла (${pendingImportLessons.length} занятий)?`)) {
+      return;
+    }
+
+    setBackupBusy(true);
+    setBackupMessage(null);
+    setBackupError(false);
+    try {
+      await onImportBackup(nextLessons);
+      setBackupMessage(mode === 'add' ? `Добавлено занятий: ${addedCount}.` : `Расписание заменено (${nextLessons.length} занятий).`);
+      setPendingImportLessons(null);
+    } catch (error) {
+      setBackupMessage(error instanceof Error ? error.message : 'Не удалось импортировать расписание.');
+      setBackupError(true);
+    } finally {
+      setBackupBusy(false);
     }
   };
 
@@ -344,10 +393,26 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
                   <div className={`mb-2 rounded-2xl p-3 ${isDark ? 'bg-neutral-800' : 'bg-neutral-100/70'}`}>
                     <div className="flex gap-2">
                       <button type="button" onClick={onExportBackup} className={`flex-1 rounded-xl px-3 py-2.5 text-xs font-semibold ${isDark ? 'bg-neutral-700 text-white' : 'bg-white text-neutral-800'}`}>Скачать копию</button>
-                      <button type="button" onClick={() => backupInputRef.current?.click()} className={`flex-1 rounded-xl px-3 py-2.5 text-xs font-semibold ${isDark ? 'bg-neutral-700 text-white' : 'bg-white text-neutral-800'}`}>Восстановить JSON</button>
+                      <button type="button" disabled={backupBusy} onClick={() => backupInputRef.current?.click()} className={`flex-1 rounded-xl px-3 py-2.5 text-xs font-semibold disabled:opacity-60 ${isDark ? 'bg-neutral-700 text-white' : 'bg-white text-neutral-800'}`}>Импортировать JSON</button>
                     </div>
                     <input ref={backupInputRef} type="file" accept="application/json,.json" className="sr-only" onChange={handleRestoreBackup} />
-                    {backupMessage && <p role="status" className={`mt-2 text-[11px] ${backupMessage.includes('не удалось') ? 'text-rose-500' : isDark ? 'text-emerald-400' : 'text-emerald-700'}`}>{backupMessage}</p>}
+                    {pendingImportLessons && (
+                      <div className={`mt-3 space-y-2 rounded-xl p-3 ${isDark ? 'bg-neutral-900' : 'bg-white'}`}>
+                        <p className={`text-[11px] ${isDark ? 'text-neutral-300' : 'text-neutral-600'}`}>
+                          В файле занятий: {pendingImportLessons.length}. Добавить к текущим или заменить всё расписание?
+                        </p>
+                        <button type="button" disabled={backupBusy} onClick={() => void applyImportedLessons('add')} className={`w-full rounded-lg px-3 py-2 text-xs font-semibold disabled:opacity-60 ${isDark ? 'bg-neutral-700 text-white' : 'bg-neutral-100 text-neutral-800'}`}>
+                          {backupBusy ? 'Сохраняю…' : 'Добавить только новые'}
+                        </button>
+                        <button type="button" disabled={backupBusy} onClick={() => void applyImportedLessons('replace')} className={`w-full rounded-lg px-3 py-2 text-xs font-semibold disabled:opacity-60 ${isDark ? 'bg-neutral-700 text-white' : 'bg-neutral-100 text-neutral-800'}`}>
+                          Заменить расписание
+                        </button>
+                        <button type="button" disabled={backupBusy} onClick={() => { setPendingImportLessons(null); setBackupMessage(null); }} className={`w-full py-1 text-[11px] disabled:opacity-60 ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                          Отмена
+                        </button>
+                      </div>
+                    )}
+                    {backupMessage && <p role="status" className={`mt-2 text-[11px] ${backupError ? 'text-rose-500' : isDark ? 'text-emerald-400' : 'text-emerald-700'}`}>{backupMessage}</p>}
                   </div>
                 )}
                 <button
