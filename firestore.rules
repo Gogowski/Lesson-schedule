@@ -1,0 +1,40 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isEditor() {
+      return request.auth != null
+        && request.auth.uid == 'REPLACE_WITH_EDITOR_UID';
+    }
+
+    function isApprovedReader() {
+      return request.auth != null
+        && request.auth.uid in [
+          'REPLACE_WITH_EDITOR_UID',
+          'REPLACE_WITH_VIEWER_UID'
+        ];
+    }
+
+    function validSchedule(data) {
+      return data.keys().hasAll(['version', 'updatedAt', 'lessons'])
+        && data.keys().hasOnly(['version', 'updatedAt', 'lessons'])
+        && data.version is int
+        && data.version > 0
+        && data.updatedAt is string
+        && data.lessons is list
+        && data.lessons.size() <= 100;
+    }
+
+    match /schedules/{scheduleId} {
+      allow get: if scheduleId == 'current' && isApprovedReader();
+      allow list: if false;
+      allow create, update: if scheduleId == 'current'
+        && isEditor()
+        && validSchedule(request.resource.data);
+      allow delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

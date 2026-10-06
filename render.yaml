@@ -1,0 +1,12 @@
+services:
+  - type: web
+    runtime: static
+    name: lesson-schedule
+    branch: main
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist
+    envVars:
+      - key: VITE_SUPABASE_URL
+        value: https://lrrprjjbawwwjpmasksy.supabase.co
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false

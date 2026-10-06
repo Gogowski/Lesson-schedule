@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Lesson, DayKey } from '../types';
-import { DAYS_CONFIG } from '../data/initialData';
+import { DAYS_CONFIG } from '../data/days';
 import { X, Trash2, Clock, ArrowRight, PlusCircle, RefreshCw } from 'lucide-react';
 
 interface KnownSubjectMeta {

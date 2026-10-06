@@ -10,7 +10,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT || 3000);
+const isProduction = process.env.NODE_ENV === 'production';
+const HOST = process.env.HOST || (isProduction ? '0.0.0.0' : '127.0.0.1');
 const DATA_DIR = path.resolve(__dirname, 'data');
 const DATA_FILE = path.resolve(DATA_DIR, 'schedule.json');
 
@@ -44,6 +46,7 @@ function saveScheduleData(data: ScheduleData): void {
 
 app.use(express.json());
 
+if (!isProduction) {
 // API: Get Schedule
 app.get('/api/schedule', (_req, res) => {
   const data = loadScheduleData();
@@ -63,6 +66,33 @@ app.post('/api/verify-pin', (req, res) => {
   } else {
     res.status(401).json({ success: false, message: 'Неверный PIN' });
   }
+});
+
+// API: Change Admin PIN
+app.post('/api/change-pin', (req, res) => {
+  const { currentPin, newPin } = req.body;
+  const currentData = loadScheduleData();
+  const normalizedNewPin = typeof newPin === 'string' ? newPin.trim() : '';
+
+  if (!currentPin || currentPin.trim() !== currentData.adminPin) {
+    res.status(401).json({ success: false, message: 'Неверный PIN' });
+    return;
+  }
+
+  if (!normalizedNewPin) {
+    res.status(400).json({ success: false, message: 'Новый PIN не может быть пустым' });
+    return;
+  }
+
+  const newData: ScheduleData = {
+    ...currentData,
+    adminPin: normalizedNewPin,
+    version: (currentData.version || 1) + 1,
+    updatedAt: new Date().toISOString()
+  };
+
+  saveScheduleData(newData);
+  res.json({ success: true });
 });
 
 // API: Save Lessons (Admin only)
@@ -93,8 +123,7 @@ app.post('/api/schedule', (req, res) => {
     }
   });
 });
-
-const isProduction = process.env.NODE_ENV === 'production';
+}
 
 async function startServer() {
   if (isProduction) {
@@ -110,8 +139,8 @@ async function startServer() {
     app.use(vite.middlewares);
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running at http://0.0.0.0:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`Server running at http://${HOST}:${PORT}`);
   });
 }
 

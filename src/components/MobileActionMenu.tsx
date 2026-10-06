@@ -1,11 +1,16 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { X, Lock, Unlock, Share2, Check, KeyRound, Moon, Sun, Bell, BellRing, BellOff } from 'lucide-react';
 import { NotificationPermissionState } from '../utils/notificationService';
+import { Lesson } from '../types';
+import { parseLessonsJson } from '../utils/scheduleValidation';
 
 interface MobileActionMenuProps {
   isOpen: boolean;
   onClose: () => void;
   isAdmin: boolean;
+  isCloudMode: boolean;
+  onExportBackup: () => void;
+  onImportBackup: (lessons: Lesson[]) => Promise<void>;
   onOpenPinModal: () => void;
   onLogoutAdmin: () => void;
   onChangePin: (curr: string, next: string) => Promise<boolean>;
@@ -21,6 +26,9 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
   isOpen,
   onClose,
   isAdmin,
+  isCloudMode,
+  onExportBackup,
+  onImportBackup,
   onOpenPinModal,
   onLogoutAdmin,
   onChangePin,
@@ -38,6 +46,8 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
   const [pinStatus, setPinStatus] = useState<string | null>(null);
   const [testSent, setTestSent] = useState(false);
   const [notifError, setNotifError] = useState<string | null>(null);
+  const [backupMessage, setBackupMessage] = useState<string | null>(null);
+  const backupInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
 
@@ -82,6 +92,23 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
       }, 1500);
     } else {
       setPinStatus('Ошибка! Проверьте текущий PIN.');
+    }
+  };
+
+  const handleRestoreBackup = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.currentTarget;
+    const file = input.files?.[0];
+    if (!file) return;
+    setBackupMessage(null);
+    try {
+      const lessons = parseLessonsJson(await file.text());
+      if (!window.confirm(`Заменить текущее расписание на данные из файла (${lessons.length} уроков)?`)) return;
+      await onImportBackup(lessons);
+      setBackupMessage('Расписание восстановлено.');
+    } catch (error) {
+      setBackupMessage(error instanceof Error ? error.message : 'Не удалось восстановить расписание.');
+    } finally {
+      input.value = '';
     }
   };
 
@@ -311,7 +338,33 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
             </button>
 
             {/* Admin Access Switch */}
-            {isAdmin ? (
+            {isCloudMode ? (
+              <div className="pt-1">
+                {isAdmin && (
+                  <div className={`mb-2 rounded-2xl p-3 ${isDark ? 'bg-neutral-800' : 'bg-neutral-100/70'}`}>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={onExportBackup} className={`flex-1 rounded-xl px-3 py-2.5 text-xs font-semibold ${isDark ? 'bg-neutral-700 text-white' : 'bg-white text-neutral-800'}`}>Скачать копию</button>
+                      <button type="button" onClick={() => backupInputRef.current?.click()} className={`flex-1 rounded-xl px-3 py-2.5 text-xs font-semibold ${isDark ? 'bg-neutral-700 text-white' : 'bg-white text-neutral-800'}`}>Восстановить JSON</button>
+                    </div>
+                    <input ref={backupInputRef} type="file" accept="application/json,.json" className="sr-only" onChange={handleRestoreBackup} />
+                    {backupMessage && <p role="status" className={`mt-2 text-[11px] ${backupMessage.includes('не удалось') ? 'text-rose-500' : isDark ? 'text-emerald-400' : 'text-emerald-700'}`}>{backupMessage}</p>}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    onLogoutAdmin();
+                    onClose();
+                  }}
+                  className={`w-full py-3.5 px-4 rounded-2xl text-xs font-semibold flex items-center justify-center gap-2 active:scale-[0.98] transition-all ${
+                    isDark ? 'bg-white text-neutral-900 hover:bg-neutral-200' : 'bg-neutral-900 text-white hover:bg-neutral-800'
+                  }`}
+                >
+                  <Unlock className="w-4 h-4 text-emerald-500" />
+                  <span>Выйти из аккаунта</span>
+                </button>
+              </div>
+            ) : isAdmin ? (
               <div className="space-y-2 pt-1">
                 <button
                   type="button"
