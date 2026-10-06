@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Lesson, DayKey } from '../types';
+import { Lesson, DayKey, LessonRepeatFrequency } from '../types';
 import { DAYS_CONFIG } from '../data/days';
 import { X, Trash2, Clock, ArrowRight, PlusCircle, RefreshCw } from 'lucide-react';
+import { dayKeyForDate, getDateForDayInWeek } from '../utils/recurrence';
+import { parseLocalDate } from '../utils/timeUtils';
 
 interface KnownSubjectMeta {
   subject: string;
@@ -16,6 +18,7 @@ interface EditLessonModalProps {
   onDelete?: (id: string) => void;
   initialLesson?: Lesson | null;
   defaultDay: DayKey;
+  defaultDate: string;
   existingLessons: Lesson[];
   isDark?: boolean;
 }
@@ -39,10 +42,14 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
   onDelete,
   initialLesson,
   defaultDay,
+  defaultDate,
   existingLessons,
   isDark,
 }) => {
   const [day, setDay] = useState<DayKey>(defaultDay);
+  const [repeatFrequency, setRepeatFrequency] = useState<LessonRepeatFrequency>('weekly');
+  const [firstLessonDate, setFirstLessonDate] = useState(defaultDate);
+  const [repeatDateError, setRepeatDateError] = useState('');
   const [startTime, setStartTime] = useState('09:30');
   const [duration, setDuration] = useState<number>(45);
   const [endTime, setEndTime] = useState('10:15');
@@ -71,8 +78,11 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
 
   useEffect(() => {
     setDuplicateConflict(null);
+    setRepeatDateError('');
     if (initialLesson) {
       setDay(initialLesson.day);
+      setRepeatFrequency(initialLesson.recurrence?.frequency || 'weekly');
+      setFirstLessonDate(initialLesson.recurrence?.startDate || defaultDate);
       setStartTime(initialLesson.startTime);
       setEndTime(initialLesson.endTime);
       const startM = toMins(initialLesson.startTime);
@@ -86,6 +96,8 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
       setStatusNote(initialLesson.statusNote || '');
     } else {
       setDay(defaultDay);
+      setRepeatFrequency('weekly');
+      setFirstLessonDate(defaultDate);
       setStartTime('09:30');
       setDuration(45);
       setEndTime(fromMins(toMins('09:30') + 45));
@@ -95,7 +107,7 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
       setHomework('');
       setStatusNote('');
     }
-  }, [initialLesson, defaultDay, isOpen]);
+  }, [initialLesson, defaultDay, defaultDate, isOpen]);
 
   if (!isOpen) return null;
 
@@ -109,6 +121,29 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
     setEndTime(fromMins(toMins(startTime) + newDur));
   };
 
+  const handleDayChange = (newDay: DayKey) => {
+    setDay(newDay);
+    const referenceDate = parseLocalDate(firstLessonDate) || parseLocalDate(defaultDate);
+    if (referenceDate) setFirstLessonDate(getDateForDayInWeek(referenceDate, newDay));
+    setRepeatDateError('');
+  };
+
+  const handleFirstLessonDateChange = (value: string) => {
+    setFirstLessonDate(value);
+    const date = parseLocalDate(value);
+    const dateDay = date ? dayKeyForDate(date) : null;
+    if (!date) {
+      setRepeatDateError('Укажи дату первого занятия.');
+      return;
+    }
+    if (!dateDay) {
+      setRepeatDateError('Для этого расписания выбери будний день.');
+      return;
+    }
+    setDay(dateDay);
+    setRepeatDateError('');
+  };
+
   const handleSelectKnownSubject = (meta: KnownSubjectMeta) => {
     setSubject(meta.subject);
     setTeacherName(meta.teacherName);
@@ -116,6 +151,14 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
   };
 
   const executeSave = (replaceId?: string) => {
+    if (repeatFrequency !== 'weekly') {
+      const date = parseLocalDate(firstLessonDate);
+      if (!date || !dayKeyForDate(date)) {
+        setRepeatDateError('Выбери дату первого занятия с понедельника по пятницу.');
+        return;
+      }
+    }
+
     onSave(
       {
         id: initialLesson?.id || `l-${Date.now()}`,
@@ -125,6 +168,9 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
         subject: subject.trim(),
         teacherName: teacherName.trim(),
         isFlexible,
+        recurrence: repeatFrequency === 'weekly'
+          ? undefined
+          : { frequency: repeatFrequency, startDate: firstLessonDate },
         homework: homework.trim() || undefined,
         statusNote: statusNote.trim() || undefined,
       },
@@ -136,6 +182,13 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!subject.trim()) return;
+    if (repeatFrequency !== 'weekly') {
+      const date = parseLocalDate(firstLessonDate);
+      if (!date || !dayKeyForDate(date)) {
+        setRepeatDateError('Выбери дату первого занятия с понедельника по пятницу.');
+        return;
+      }
+    }
 
     if (!initialLesson) {
       const match = existingLessons.find(
@@ -261,7 +314,7 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
                   <button
                     key={d.key}
                     type="button"
-                    onClick={() => setDay(d.key)}
+                    onClick={() => handleDayChange(d.key)}
                     className={`py-2 text-xs font-semibold rounded-xl transition-all ${
                       day === d.key
                         ? isDark
@@ -275,6 +328,47 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
                     {d.short}
                   </button>
                 ))}
+              </div>
+
+              <div className={`p-3 rounded-2xl space-y-2 ${isDark ? 'bg-neutral-800' : 'bg-neutral-100/70'}`}>
+                <label className={`block text-xs font-semibold ${isDark ? 'text-neutral-200' : 'text-neutral-800'}`} htmlFor="lesson-repeat-frequency">
+                  Повторение
+                </label>
+                <select
+                  id="lesson-repeat-frequency"
+                  value={repeatFrequency}
+                  onChange={(e) => setRepeatFrequency(e.target.value as LessonRepeatFrequency)}
+                  className={`w-full px-3 py-2.5 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 ${
+                    isDark ? 'bg-neutral-700 text-white focus:ring-white' : 'bg-white text-neutral-900 focus:ring-neutral-900'
+                  }`}
+                >
+                  <option value="weekly">Каждую неделю</option>
+                  <option value="biweekly">Через неделю</option>
+                  <option value="monthly">Раз в месяц — в тот же день недели</option>
+                </select>
+                {repeatFrequency !== 'weekly' && (
+                  <div>
+                    <label className={`block text-[10px] uppercase font-bold mb-1 ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`} htmlFor="lesson-first-date">
+                      Дата первого занятия
+                    </label>
+                    <input
+                      id="lesson-first-date"
+                      type="date"
+                      value={firstLessonDate}
+                      onChange={(e) => handleFirstLessonDateChange(e.target.value)}
+                      required
+                      className={`w-full px-3 py-2 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 ${
+                        isDark ? 'bg-neutral-700 text-white focus:ring-white' : 'bg-white text-neutral-900 focus:ring-neutral-900'
+                      }`}
+                    />
+                    <p className={`mt-1 text-[11px] leading-relaxed ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                      {repeatFrequency === 'biweekly'
+                        ? 'Следующие занятия будут раз в 14 дней от этой даты.'
+                        : 'Повтор будет в ту же позицию дня недели, например во второй вторник месяца. Если такой позиции нет, занятие пропускается.'}
+                    </p>
+                    {repeatDateError && <p className="mt-1 text-[11px] font-medium text-rose-500">{repeatDateError}</p>}
+                  </div>
+                )}
               </div>
 
               {/* Time Picker Block */}

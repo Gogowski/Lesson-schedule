@@ -1,5 +1,6 @@
 import { Lesson } from '../types';
-import { getActualDayKey, timeToMinutes } from './timeUtils';
+import { formatLocalDate, timeToMinutes } from './timeUtils';
+import { isLessonScheduledOnDate } from './recurrence';
 
 const STORAGE_KEY_ENABLED = 'lesson_notifications_enabled';
 const STORAGE_KEY_NOTIFIED = 'lesson_notified_history';
@@ -127,14 +128,11 @@ export function checkLessonNotifications(lessons: Lesson[]): void {
     return;
   }
 
-  const actualDay = getActualDayKey();
-  if (!actualDay) return;
-
   const now = new Date();
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
-  const todayKeyStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const todayKeyStr = formatLocalDate(now);
 
-  const todaysLessons = lessons.filter((l) => l.day === actualDay);
+  const todaysLessons = lessons.filter((lesson) => isLessonScheduledOnDate(lesson, now));
 
   for (const lesson of todaysLessons) {
     const startMins = timeToMinutes(lesson.startTime);

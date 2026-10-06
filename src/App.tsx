@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { onAuthStateChanged, sendPasswordResetEmail, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { doc, onSnapshot, runTransaction, setDoc } from 'firebase/firestore';
 import { Lesson, DayKey } from './types';
-import { getCurrentDayKey, timeToMinutes, getWeekDaysInfo } from './utils/timeUtils';
+import { formatLocalDate, getCurrentDayKey, timeToMinutes, getWeekDaysInfo, parseLocalDate } from './utils/timeUtils';
+import { getDateForDayInWeek, getWeekdayOrdinal, isLessonScheduledOnDate } from './utils/recurrence';
 import { 
   checkLessonNotifications, 
   getNotificationsEnabled, 
@@ -224,6 +225,7 @@ export default function App() {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [editingLesson, setEditingLesson] = useState<Lesson | null>(null);
+  const [defaultLessonDate, setDefaultLessonDate] = useState(() => formatLocalDate(new Date()));
 
   // Browser Notification states
   const [notificationsEnabled, setNotificationsEnabledState] = useState(() => getNotificationsEnabled());
@@ -239,6 +241,7 @@ export default function App() {
   });
 
   const currentTodayKey = getCurrentDayKey();
+  const todayDateISO = formatLocalDate(new Date());
 
   // Reference date for current week offset
   const referenceDate = new Date();
@@ -517,13 +520,24 @@ export default function App() {
   };
 
   const handleOpenAdd = (dayToSet?: DayKey) => {
+    const targetDay = dayToSet || currentTodayKey;
+    let firstDate = weekDays.find((d) => d.key === targetDay)?.dateISO || getDateForDayInWeek(referenceDate, targetDay);
+    if (weekOffset === 0 && firstDate < todayDateISO) {
+      const nextOccurrence = parseLocalDate(firstDate);
+      if (nextOccurrence) {
+        nextOccurrence.setDate(nextOccurrence.getDate() + 7);
+        firstDate = formatLocalDate(nextOccurrence);
+      }
+    }
+    setDefaultLessonDate(firstDate);
     setEditingLesson(null);
-    if (dayToSet) setActiveDay(dayToSet);
+    setActiveDay(targetDay);
     setIsEditModalOpen(true);
   };
 
   const handleEdit = (lesson: Lesson) => {
     setEditingLesson(lesson);
+    setDefaultLessonDate(lesson.recurrence?.startDate || getDateForDayInWeek(referenceDate, lesson.day));
     setIsEditModalOpen(true);
   };
 
@@ -589,9 +603,8 @@ export default function App() {
   };
 
   // Past check: ONLY for today in current week!
-  const isLessonPastToday = (lesson: Lesson): boolean => {
-    if (weekOffset !== 0) return false;
-    if (lesson.day !== currentTodayKey) return false;
+  const isLessonPastToday = (lesson: Lesson, occurrenceDate: string): boolean => {
+    if (occurrenceDate !== todayDateISO) return false;
     const endMins = timeToMinutes(lesson.endTime);
     return currentTimeMinutes >= endMins;
   };
@@ -625,9 +638,22 @@ export default function App() {
   };
 
   // Filter lessons
-  const filteredLessons = lessons
-    .filter((l) => (activeDay === 'all' ? true : l.day === activeDay))
-    .sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
+  const weekOccurrences = weekDays.flatMap((dayInfo) => {
+    const occurrenceDate = parseLocalDate(dayInfo.dateISO);
+    if (!occurrenceDate) return [];
+    return lessons
+      .filter((lesson) => isLessonScheduledOnDate(lesson, occurrenceDate))
+      .map((lesson) => ({ lesson, day: dayInfo.key, date: dayInfo.dateISO }));
+  });
+  const filteredLessons = weekOccurrences
+    .filter((occurrence) => activeDay === 'all' || occurrence.day === activeDay)
+    .sort((a, b) => {
+      if (activeDay === 'all') {
+        const weekdayDifference = ['mon', 'tue', 'wed', 'thu', 'fri'].indexOf(a.day) - ['mon', 'tue', 'wed', 'thu', 'fri'].indexOf(b.day);
+        if (weekdayDifference !== 0) return weekdayDifference;
+      }
+      return timeToMinutes(a.lesson.startTime) - timeToMinutes(b.lesson.startTime);
+    });
 
   const activeDayInfo = weekDays.find(d => d.key === activeDay);
 
@@ -769,7 +795,7 @@ export default function App() {
           }`}>
             {weekDays.map((d) => {
               const isSelected = activeDay === d.key;
-              const count = lessons.filter((l) => l.day === d.key).length;
+              const count = weekOccurrences.filter((occurrence) => occurrence.day === d.key).length;
 
               return (
                 <button
@@ -837,18 +863,18 @@ export default function App() {
         {/* Lessons List */}
         {filteredLessons.length > 0 ? (
           <div className={activeDay === 'all' ? 'grid grid-cols-1 md:grid-cols-2 gap-3.5' : 'space-y-3'}>
-            {filteredLessons.map((lesson) => {
+            {filteredLessons.map(({ lesson, day: occurrenceDay, date: occurrenceDate }) => {
               const startMins = timeToMinutes(lesson.startTime);
               const endMins = timeToMinutes(lesson.endTime);
-              const isToday = currentTodayKey === lesson.day && weekOffset === 0;
+              const isToday = occurrenceDate === todayDateISO;
               const isHappeningNow = isToday && currentTimeMinutes >= startMins && currentTimeMinutes < endMins;
-              const isPastToday = isLessonPastToday(lesson);
+              const isPastToday = isLessonPastToday(lesson, occurrenceDate);
 
               const countdownText = formatCountdownLabel(lesson, isToday, isHappeningNow, isPastToday);
 
               return (
                 <div
-                  key={lesson.id}
+                  key={`${lesson.id}-${occurrenceDate}`}
                   className={`rounded-[22px] p-4 transition-all duration-200 shadow-2xs relative ${
                     isPastToday
                       ? isDark ? 'bg-neutral-900/40 opacity-50' : 'bg-neutral-100/75 opacity-65'
@@ -864,7 +890,7 @@ export default function App() {
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md font-display ${
                           isDark ? 'bg-neutral-800 text-white' : 'bg-neutral-100 text-neutral-900'
                         }`}>
-                          {weekDays.find((d) => d.key === lesson.day)?.short || lesson.day.toUpperCase()}
+                          {weekDays.find((d) => d.key === occurrenceDay)?.short || occurrenceDay.toUpperCase()}
                         </span>
                       )}
 
@@ -875,6 +901,17 @@ export default function App() {
                       }`}>
                         {lesson.startTime} — {lesson.endTime}
                       </span>
+
+                      {lesson.recurrence?.frequency === 'biweekly' && (
+                        <span className={`text-[10px] font-semibold ${isDark ? 'text-sky-400' : 'text-sky-700'}`} title="Урок повторяется раз в две недели">
+                          Раз в 2 недели
+                        </span>
+                      )}
+                      {lesson.recurrence?.frequency === 'monthly' && (
+                        <span className={`text-[10px] font-semibold ${isDark ? 'text-sky-400' : 'text-sky-700'}`} title={`Повтор каждый месяц: ${getWeekdayOrdinal(lesson.recurrence.startDate)}-й ${weekDays.find((d) => d.key === lesson.day)?.short} месяца`}>
+                          Раз в месяц
+                        </span>
+                      )}
 
                       {/* Floating / temporary schedule label */}
                       {lesson.isFlexible && (
@@ -1047,6 +1084,7 @@ export default function App() {
         onDelete={handleDelete}
         initialLesson={editingLesson}
         defaultDay={activeDay === 'all' ? 'mon' : activeDay}
+        defaultDate={defaultLessonDate}
         existingLessons={lessons}
         isDark={isDark}
       />
