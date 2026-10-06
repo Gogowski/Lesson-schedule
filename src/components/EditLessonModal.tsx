@@ -14,7 +14,7 @@ interface KnownSubjectMeta {
 interface EditLessonModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (lesson: Lesson, replaceLessonId?: string) => void;
+  onSave: (lesson: Lesson, replaceLessonId?: string) => Promise<boolean>;
   onDelete?: (id: string) => void;
   initialLesson?: Lesson | null;
   defaultDay: DayKey;
@@ -58,6 +58,8 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
   const [isFlexible, setIsFlexible] = useState(false);
   const [homework, setHomework] = useState('');
   const [statusNote, setStatusNote] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   const [duplicateConflict, setDuplicateConflict] = useState<Lesson | null>(null);
 
@@ -79,6 +81,8 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
   useEffect(() => {
     setDuplicateConflict(null);
     setRepeatDateError('');
+    setSaveError('');
+    setIsSaving(false);
     if (initialLesson) {
       setDay(initialLesson.day);
       setRepeatFrequency(initialLesson.recurrence?.frequency || 'weekly');
@@ -150,7 +154,8 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
     if (meta.isFlexible !== undefined) setIsFlexible(meta.isFlexible);
   };
 
-  const executeSave = (replaceId?: string) => {
+  const executeSave = async (replaceId?: string) => {
+    if (isSaving) return;
     if (repeatFrequency !== 'weekly') {
       const date = parseLocalDate(firstLessonDate);
       if (!date || !dayKeyForDate(date)) {
@@ -159,24 +164,36 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
       }
     }
 
-    onSave(
-      {
-        id: initialLesson?.id || `l-${Date.now()}`,
-        day,
-        startTime,
-        endTime,
-        subject: subject.trim(),
-        teacherName: teacherName.trim(),
-        isFlexible,
-        recurrence: repeatFrequency === 'weekly'
-          ? undefined
-          : { frequency: repeatFrequency, startDate: firstLessonDate },
-        homework: homework.trim() || undefined,
-        statusNote: statusNote.trim() || undefined,
-      },
-      replaceId
-    );
-    onClose();
+    setIsSaving(true);
+    setSaveError('');
+    try {
+      const saved = await onSave(
+        {
+          id: initialLesson?.id || `l-${Date.now()}`,
+          day,
+          startTime,
+          endTime,
+          subject: subject.trim(),
+          teacherName: teacherName.trim(),
+          isFlexible,
+          recurrence: repeatFrequency === 'weekly'
+            ? undefined
+            : { frequency: repeatFrequency, startDate: firstLessonDate },
+          homework: homework.trim() || undefined,
+          statusNote: statusNote.trim() || undefined,
+        },
+        replaceId
+      );
+      if (!saved) {
+        setSaveError('Изменения не сохранены. Проверь сообщение об ошибке и повтори попытку.');
+        return;
+      }
+      onClose();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Не удалось сохранить изменения. Проверь подключение и повтори попытку.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -200,13 +217,17 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
       }
     }
 
-    executeSave();
+    void executeSave();
+  };
+
+  const handleClose = () => {
+    if (!isSaving) onClose();
   };
 
   return (
     <div 
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150"
-      onClick={onClose}
+      onClick={handleClose}
     >
       <div 
         className={`w-full sm:max-w-md rounded-t-[32px] sm:rounded-3xl p-5 sm:p-6 shadow-2xl max-h-[92vh] overflow-y-auto pb-safe transition-colors ${
@@ -297,7 +318,9 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
                   </button>
                 )}
                 <button
-                  onClick={onClose}
+                  type="button"
+                  onClick={handleClose}
+                  disabled={isSaving}
                   className={`p-2 rounded-full transition-colors ${
                     isDark ? 'text-neutral-400 hover:text-white hover:bg-neutral-800' : 'text-neutral-400 hover:text-neutral-700 hover:bg-neutral-100'
                   }`}
@@ -351,16 +374,18 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
                     <label className={`block text-[10px] uppercase font-bold mb-1 ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`} htmlFor="lesson-first-date">
                       Дата первого занятия
                     </label>
-                    <input
-                      id="lesson-first-date"
-                      type="date"
-                      value={firstLessonDate}
-                      onChange={(e) => handleFirstLessonDateChange(e.target.value)}
-                      required
-                      className={`w-full px-3 py-2 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 ${
-                        isDark ? 'bg-neutral-700 text-white focus:ring-white' : 'bg-white text-neutral-900 focus:ring-neutral-900'
-                      }`}
-                    />
+                    <div className="min-w-0 max-w-full overflow-hidden rounded-xl">
+                      <input
+                        id="lesson-first-date"
+                        type="date"
+                        value={firstLessonDate}
+                        onChange={(e) => handleFirstLessonDateChange(e.target.value)}
+                        required
+                        className={`lesson-date-input w-full min-w-0 max-w-full px-3 py-2 rounded-xl text-base font-medium focus:outline-none focus:ring-2 ${
+                          isDark ? 'bg-neutral-700 text-white focus:ring-white' : 'bg-white text-neutral-900 focus:ring-neutral-900'
+                        }`}
+                      />
+                    </div>
                     <p className={`mt-1 text-[11px] leading-relaxed ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
                       {repeatFrequency === 'biweekly'
                         ? 'Следующие занятия будут раз в 14 дней от этой даты.'
@@ -582,11 +607,14 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
               </div>
 
               {/* Actions */}
+              {saveError && <p role="alert" className="text-xs font-medium text-rose-500">{saveError}</p>}
               <div className="flex gap-2 pt-1">
                 <button
                   type="button"
-                  onClick={onClose}
+                  onClick={handleClose}
+                  disabled={isSaving}
                   className={`flex-1 py-3 text-sm font-semibold rounded-2xl active:scale-[0.98] transition-all ${
+                    isSaving ? 'opacity-50 cursor-not-allowed' : ''} ${
                     isDark ? 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
                   }`}
                 >
@@ -594,11 +622,13 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
                 </button>
                 <button
                   type="submit"
+                  disabled={isSaving}
                   className={`flex-1 py-3 text-sm font-semibold rounded-2xl active:scale-[0.98] transition-all shadow-xs ${
+                    isSaving ? 'opacity-60 cursor-wait' : ''} ${
                     isDark ? 'bg-white text-neutral-900 hover:bg-neutral-200' : 'bg-neutral-900 text-white hover:bg-neutral-800'
                   }`}
                 >
-                  Сохранить
+                  {isSaving ? 'Сохраняю…' : 'Сохранить'}
                 </button>
               </div>
             </form>

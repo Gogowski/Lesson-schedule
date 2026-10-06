@@ -48,6 +48,7 @@ export default function App() {
   const [scheduleLoading, setScheduleLoading] = useState(cloudConfigured);
   const [scheduleMissing, setScheduleMissing] = useState(false);
   const [scheduleVersion, setScheduleVersion] = useState(0);
+  const scheduleVersionRef = useRef(0);
   const [cloudError, setCloudError] = useState('');
   const [lessons, setLessons] = useState<Lesson[]>([]);
   const [activeDay, setActiveDay] = useState<DayKey | 'all'>(() => getCurrentDayKey());
@@ -146,6 +147,8 @@ export default function App() {
     if (!cloudConfigured) return;
     if (!cloudUser) {
       setLessons([]);
+      scheduleVersionRef.current = 0;
+      setScheduleVersion(0);
       setScheduleLoading(false);
       setScheduleMissing(false);
       setCloudError('');
@@ -166,7 +169,9 @@ export default function App() {
       const scheduleRef = doc(firestore, 'schedules', 'current');
       return onSnapshot(scheduleRef, (snapshot) => {
         if (!snapshot.exists()) {
+          if (scheduleVersionRef.current > 0) return;
           setLessons([]);
+          scheduleVersionRef.current = 0;
           setScheduleVersion(0);
           setScheduleMissing(true);
         } else {
@@ -174,6 +179,8 @@ export default function App() {
           if (!isLessons(data.lessons) || typeof data.version !== 'number') {
             setCloudError('Сохранённые данные расписания имеют неверный формат.');
           } else {
+            if (data.version < scheduleVersionRef.current) return;
+            scheduleVersionRef.current = data.version;
             setLessons(data.lessons);
             setScheduleVersion(data.version);
             setScheduleMissing(false);
@@ -201,13 +208,17 @@ export default function App() {
       if (error) {
         setCloudError('Не удалось загрузить расписание. Проверьте подключение и права Supabase.');
       } else if (!data) {
+        if (scheduleVersionRef.current > 0) return;
         setLessons([]);
+        scheduleVersionRef.current = 0;
         setScheduleVersion(0);
         setScheduleMissing(true);
         setCloudError('');
       } else if (!isLessons(data.lessons) || typeof data.version !== 'number') {
         setCloudError('Сохранённые данные расписания имеют неверный формат.');
       } else {
+        if (data.version < scheduleVersionRef.current) return;
+        scheduleVersionRef.current = data.version;
         setLessons(data.lessons);
         setScheduleVersion(data.version);
         setScheduleMissing(false);
@@ -323,17 +334,16 @@ export default function App() {
   }, [fetchSchedule]);
 
   // Save to server
-  const saveLessons = async (newLessons: Lesson[]) => {
+  const saveLessons = async (newLessons: Lesson[]): Promise<boolean> => {
     if (useFirebase) {
-      if (!isAdmin || !firestore) return;
-      const previousLessons = lessons;
+      if (!isAdmin || !firestore) return false;
       try {
         const scheduleRef = doc(firestore, 'schedules', 'current');
-        await runTransaction(firestore, async (transaction) => {
+        const nextVersion = await runTransaction(firestore, async (transaction) => {
           const snapshot = await transaction.get(scheduleRef);
           if (!snapshot.exists()) throw new Error('Расписание ещё не создано.');
           const currentVersion = Number(snapshot.data().version);
-          if (currentVersion !== scheduleVersion) {
+          if (currentVersion !== scheduleVersionRef.current) {
             throw new Error('Расписание изменилось в другом окне. Обновите страницу и повторите правку.');
           }
           transaction.update(scheduleRef, {
@@ -341,48 +351,62 @@ export default function App() {
             version: currentVersion + 1,
             updatedAt: new Date().toISOString(),
           });
+          return currentVersion + 1;
         });
+        if (nextVersion >= scheduleVersionRef.current) {
+          scheduleVersionRef.current = nextVersion;
+          setScheduleVersion(nextVersion);
+          setLessons(newLessons);
+        }
+        return true;
       } catch (error) {
-        setLessons(previousLessons);
         window.alert(error instanceof Error ? error.message : 'Не удалось сохранить расписание.');
+        return false;
       }
-      return;
     }
 
     if (useSupabase) {
-      if (!isAdmin || !supabase) return;
-      const previousLessons = lessons;
-      const nextVersion = scheduleVersion + 1;
+      if (!isAdmin || !supabase) return false;
+      const expectedVersion = scheduleVersionRef.current;
+      const nextVersion = expectedVersion + 1;
       try {
         const { data, error } = await supabase
           .from('schedules')
           .update({ lessons: newLessons, version: nextVersion, updated_at: new Date().toISOString() })
           .eq('id', 'current')
-          .eq('version', scheduleVersion)
+          .eq('version', expectedVersion)
           .select('version')
           .maybeSingle();
         if (error) throw error;
         if (!data) throw new Error('Расписание изменилось в другом окне. Обновите страницу и повторите правку.');
-        setLessons(newLessons);
-        setScheduleVersion(nextVersion);
+        const savedVersion = Number(data.version);
+        if (Number.isFinite(savedVersion) && savedVersion >= scheduleVersionRef.current) {
+          scheduleVersionRef.current = savedVersion;
+          setScheduleVersion(savedVersion);
+          setLessons(newLessons);
+        }
+        return true;
       } catch (error) {
-        setLessons(previousLessons);
         window.alert(error instanceof Error ? error.message : 'Не удалось сохранить расписание.');
+        return false;
       }
-      return;
     }
 
-    setLessons(newLessons);
-    if (!adminPin) return;
+    if (!isAdmin) return false;
+    if (!adminPin) return false;
 
     try {
-      await fetch('/api/schedule', {
+      const response = await fetch('/api/schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pin: adminPin, lessons: newLessons }),
       });
-    } catch (err) {
-      console.error('Save error', err);
+      if (!response.ok) throw new Error('Не удалось сохранить расписание на сервере.');
+      setLessons(newLessons);
+      return true;
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Не удалось сохранить расписание.');
+      return false;
     }
   };
 
@@ -437,6 +461,9 @@ export default function App() {
         updatedAt: new Date().toISOString(),
         lessons: importedLessons,
       });
+      scheduleVersionRef.current = 1;
+      setScheduleVersion(1);
+      setLessons(importedLessons);
       return;
     }
     if (supabase) {
@@ -451,6 +478,7 @@ export default function App() {
       }
       if (error) throw error;
       setLessons(importedLessons);
+      scheduleVersionRef.current = 1;
       setScheduleVersion(1);
       setScheduleMissing(false);
       return;
@@ -477,7 +505,7 @@ export default function App() {
     if (!isAdmin) throw new Error('Только владелец может восстановить расписание.');
     if (useFirebase && firestore) {
       const scheduleRef = doc(firestore, 'schedules', 'current');
-      await runTransaction(firestore, async (transaction) => {
+      const nextVersion = await runTransaction(firestore, async (transaction) => {
         const snapshot = await transaction.get(scheduleRef);
         if (!snapshot.exists()) throw new Error('Запись расписания не найдена.');
         const version = Number(snapshot.data().version);
@@ -486,22 +514,33 @@ export default function App() {
           version: version + 1,
           updatedAt: new Date().toISOString(),
         });
+        return version + 1;
       });
+      if (nextVersion >= scheduleVersionRef.current) {
+        scheduleVersionRef.current = nextVersion;
+        setScheduleVersion(nextVersion);
+        setLessons(restoredLessons);
+      }
       return;
     }
     if (supabase) {
-      const nextVersion = scheduleVersion + 1;
+      const expectedVersion = scheduleVersionRef.current;
+      const nextVersion = expectedVersion + 1;
       const { data, error } = await supabase
         .from('schedules')
         .update({ lessons: restoredLessons, version: nextVersion, updated_at: new Date().toISOString() })
         .eq('id', 'current')
-        .eq('version', scheduleVersion)
+        .eq('version', expectedVersion)
         .select('version')
         .maybeSingle();
       if (error) throw error;
       if (!data) throw new Error('Расписание изменилось в другом окне. Обновите страницу и повторите восстановление.');
-      setLessons(restoredLessons);
-      setScheduleVersion(nextVersion);
+      const restoredVersion = Number(data.version);
+      if (Number.isFinite(restoredVersion) && restoredVersion >= scheduleVersionRef.current) {
+        setLessons(restoredLessons);
+        scheduleVersionRef.current = restoredVersion;
+        setScheduleVersion(restoredVersion);
+      }
       return;
     }
     throw new Error('Облачное хранилище не настроено.');
@@ -553,7 +592,7 @@ export default function App() {
     saveLessons(updated);
   };
 
-  const handleSaveLesson = (lesson: Lesson, replaceLessonId?: string) => {
+  const handleSaveLesson = (lesson: Lesson, replaceLessonId?: string): Promise<boolean> => {
     let updated: Lesson[] = [...lessons];
 
     if (replaceLessonId) {
@@ -568,7 +607,7 @@ export default function App() {
       }
     }
 
-    saveLessons(updated);
+    return saveLessons(updated);
   };
 
   const handleCopyHomework = (id: string, text: string) => {
