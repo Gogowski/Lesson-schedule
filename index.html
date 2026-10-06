@@ -3,6 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f5f6f8" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Расписание" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <title>Онлайн-Расписание</title>
     <meta name="description" content="Персональное интерактивное расписание онлайн-обучения с поддержкой постоянных и плавающих графиков учителей, синхронизацией и раздельным доступом для админа и зрителя." />
     <meta property="og:title" content="Онлайн-Расписание" />
@@ -12,8 +17,19 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&family=Unbounded:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+    <script>
+      try {
+        const dark = localStorage.getItem('app_theme') === 'dark';
+        document.documentElement.classList.toggle('dark', dark);
+        document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#0a0a0a' : '#f5f6f8');
+        document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]')?.setAttribute('content', dark ? 'black' : 'default');
+      } catch {
+        // Theme is applied by React after startup when browser storage is unavailable.
+      }
+    </script>
   </head>
-  <body class="bg-[#f5f6f8] text-neutral-900 antialiased selection:bg-neutral-900 selection:text-white">
+  <body class="antialiased selection:bg-neutral-900 selection:text-white">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

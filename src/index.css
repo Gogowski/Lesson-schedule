@@ -3,9 +3,34 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+
+  html {
+    background-color: #f5f6f8;
+    color-scheme: light;
+  }
+
+  html.dark {
+    background-color: #0a0a0a;
+    color-scheme: dark;
+  }
+
   body {
+    min-height: 100vh;
+    margin: 0;
+    background-color: #f5f6f8;
+    color: #171717;
     font-family: 'Onest', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     -webkit-tap-highlight-color: transparent;
+  }
+
+  html.dark body {
+    background-color: #0a0a0a;
+    color: #fff;
   }
 
   .font-display {
