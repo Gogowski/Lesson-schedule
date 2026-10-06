@@ -1,6 +1,4 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { onAuthStateChanged, sendPasswordResetEmail, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { doc, onSnapshot, runTransaction, setDoc } from 'firebase/firestore';
 import { Lesson, DayKey } from './types';
 import { formatLocalDate, getCurrentDayKey, timeToMinutes, getWeekDaysInfo, parseLocalDate } from './utils/timeUtils';
 import { getDateForDayInWeek, getWeekdayOrdinal, isLessonScheduledOnDate } from './utils/recurrence';
@@ -18,7 +16,7 @@ import { PinModal } from './components/PinModal';
 import { CloudLogin } from './components/CloudLogin';
 import { CloudScheduleSetup } from './components/CloudScheduleSetup';
 import { MobileActionMenu } from './components/MobileActionMenu';
-import { firebaseAuth, firebaseConfigured, firestore, scheduleEditorUid } from './services/firebase';
+import { firebaseConfigured, scheduleEditorUid } from './services/firebaseConfig';
 import { supabase, supabaseConfigured } from './services/supabase';
 import { isLessons } from './utils/scheduleValidation';
 import { 
@@ -45,10 +43,13 @@ export default function App() {
   const [cloudAuthReady, setCloudAuthReady] = useState(!cloudConfigured);
   const [cloudRoleReady, setCloudRoleReady] = useState(!useSupabase);
   const [supabaseRole, setSupabaseRole] = useState<'editor' | 'viewer' | null>(null);
+  const [accessCheckAttempt, setAccessCheckAttempt] = useState(0);
+  const [scheduleReloadAttempt, setScheduleReloadAttempt] = useState(0);
   const [scheduleLoading, setScheduleLoading] = useState(cloudConfigured);
   const [scheduleMissing, setScheduleMissing] = useState(false);
   const [scheduleVersion, setScheduleVersion] = useState(0);
   const scheduleVersionRef = useRef(0);
+  const lastAuthUserIdRef = useRef<string | null>(null);
   const [cloudError, setCloudError] = useState('');
   const [lessons, setLessons] = useState<Lesson[]>([]);
   const [activeDay, setActiveDay] = useState<DayKey | 'all'>(() => getCurrentDayKey());
@@ -89,17 +90,43 @@ export default function App() {
   }, [isDark]);
 
   useEffect(() => {
-    if (useFirebase && firebaseAuth) {
-      return onAuthStateChanged(firebaseAuth, (user) => {
-        setCloudUser(user ? { uid: user.uid } : null);
-        setCloudAuthReady(true);
-      });
+    if (useFirebase) {
+      let cancelled = false;
+      let unsubscribe: (() => void) | undefined;
+      void Promise.all([import('firebase/auth'), import('./services/firebase')])
+        .then(([authSdk, firebaseService]) => {
+          if (cancelled) return;
+          if (!firebaseService.firebaseAuth) {
+            setCloudError('Не удалось настроить Firebase Auth.');
+            setCloudAuthReady(true);
+            return;
+          }
+          unsubscribe = authSdk.onAuthStateChanged(firebaseService.firebaseAuth, (user) => {
+            setCloudUser(user ? { uid: user.uid } : null);
+            setCloudAuthReady(true);
+          });
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setCloudError('Не удалось загрузить модуль входа. Проверьте подключение и перезагрузите страницу.');
+          setCloudAuthReady(true);
+          setScheduleLoading(false);
+        });
+      return () => {
+        cancelled = true;
+        unsubscribe?.();
+      };
     }
     if (!supabase) return;
     const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setCloudUser(session?.user ? { uid: session.user.id } : null);
-      setSupabaseRole(null);
-      setCloudRoleReady(!session?.user);
+      const nextUserId = session?.user.id ?? null;
+      if (lastAuthUserIdRef.current !== nextUserId) {
+        lastAuthUserIdRef.current = nextUserId;
+        setCloudUser(nextUserId ? { uid: nextUserId } : null);
+        setSupabaseRole(null);
+        setCloudRoleReady(!nextUserId);
+        if (!nextUserId) setCloudError('');
+      }
       setCloudAuthReady(true);
     });
     return () => authListener.subscription.unsubscribe();
@@ -118,30 +145,47 @@ export default function App() {
     }
 
     let cancelled = false;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 12_000);
     setCloudRoleReady(false);
     setCloudError('');
-    void supabase
-      .from('schedule_access')
-      .select('role')
-      .eq('user_id', cloudUser.uid)
-      .maybeSingle()
-      .then(({ data, error }) => {
+    void (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('schedule_access')
+          .select('role')
+          .eq('user_id', cloudUser.uid)
+          .abortSignal(controller.signal)
+          .maybeSingle();
         if (cancelled) return;
         if (error) {
           setSupabaseRole(null);
-          setCloudError('Не удалось проверить права пользователя.');
+          setCloudError(controller.signal.aborted
+            ? 'Проверка прав заняла слишком много времени. Проверьте подключение и попробуйте снова.'
+            : 'Не удалось проверить права пользователя. Проверьте подключение и попробуйте снова.');
         } else if (data?.role === 'editor' || data?.role === 'viewer') {
           setSupabaseRole(data.role);
         } else {
           setSupabaseRole(null);
           setCloudError('У этого аккаунта нет доступа к расписанию.');
         }
-        setCloudRoleReady(true);
-      });
+      } catch {
+        if (cancelled) return;
+        setSupabaseRole(null);
+        setCloudError(controller.signal.aborted
+          ? 'Проверка прав заняла слишком много времени. Проверьте подключение и попробуйте снова.'
+          : 'Не удалось проверить права пользователя. Проверьте подключение и попробуйте снова.');
+      } finally {
+        window.clearTimeout(timeoutId);
+        if (!cancelled) setCloudRoleReady(true);
+      }
+    })();
     return () => {
       cancelled = true;
+      window.clearTimeout(timeoutId);
+      controller.abort();
     };
-  }, [cloudUser]);
+  }, [cloudUser, accessCheckAttempt]);
 
   useEffect(() => {
     if (!cloudConfigured) return;
@@ -165,74 +209,113 @@ export default function App() {
     setScheduleLoading(true);
     setScheduleMissing(false);
     setCloudError('');
-    if (useFirebase && firestore) {
-      const scheduleRef = doc(firestore, 'schedules', 'current');
-      return onSnapshot(scheduleRef, (snapshot) => {
-        if (!snapshot.exists()) {
-          if (scheduleVersionRef.current > 0) return;
-          setLessons([]);
-          scheduleVersionRef.current = 0;
-          setScheduleVersion(0);
-          setScheduleMissing(true);
-        } else {
-          const data = snapshot.data();
-          if (!isLessons(data.lessons) || typeof data.version !== 'number') {
-            setCloudError('Сохранённые данные расписания имеют неверный формат.');
-          } else {
-            if (data.version < scheduleVersionRef.current) return;
-            scheduleVersionRef.current = data.version;
-            setLessons(data.lessons);
-            setScheduleVersion(data.version);
-            setScheduleMissing(false);
-          }
-        }
-        setScheduleLoading(false);
-      }, (error) => {
-        setCloudError(error.code === 'permission-denied'
-          ? 'У этого аккаунта нет доступа к расписанию. Проверьте список разрешённых пользователей.'
-          : 'Не удалось загрузить расписание. Проверьте подключение и настройки Firebase.');
-        setScheduleLoading(false);
-      });
+    if (useFirebase) {
+      let cancelled = false;
+      let unsubscribe: (() => void) | undefined;
+      void Promise.all([import('firebase/firestore'), import('./services/firebase')])
+        .then(([firestoreSdk, firebaseService]) => {
+          if (cancelled) return;
+          if (!firebaseService.firestore) throw new Error('Firebase database is not configured.');
+          const scheduleRef = firestoreSdk.doc(firebaseService.firestore, 'schedules', 'current');
+          unsubscribe = firestoreSdk.onSnapshot(scheduleRef, (snapshot) => {
+            if (!snapshot.exists()) {
+              if (scheduleVersionRef.current > 0) return;
+              setLessons([]);
+              scheduleVersionRef.current = 0;
+              setScheduleVersion(0);
+              setScheduleMissing(true);
+            } else {
+              const data = snapshot.data();
+              if (!isLessons(data.lessons) || typeof data.version !== 'number') {
+                setCloudError('Сохранённые данные расписания имеют неверный формат.');
+              } else if (data.version >= scheduleVersionRef.current) {
+                scheduleVersionRef.current = data.version;
+                setLessons(data.lessons);
+                setScheduleVersion(data.version);
+                setScheduleMissing(false);
+                setCloudError('');
+              }
+            }
+            setScheduleLoading(false);
+          }, (error) => {
+            setCloudError(error.code === 'permission-denied'
+              ? 'У этого аккаунта нет доступа к расписанию. Проверьте список разрешённых пользователей.'
+              : 'Не удалось загрузить расписание. Проверьте подключение и настройки Firebase.');
+            setScheduleLoading(false);
+          });
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setCloudError('Не удалось загрузить модуль расписания. Проверьте подключение и попробуйте снова.');
+          setScheduleLoading(false);
+        });
+      return () => {
+        cancelled = true;
+        unsubscribe?.();
+      };
     }
 
     const supabaseClient = supabase;
     if (!supabaseClient) return;
     let cancelled = false;
-    const loadSchedule = async () => {
-      const { data, error } = await supabaseClient
-        .from('schedules')
-        .select('lessons, version')
-        .eq('id', 'current')
-        .maybeSingle();
-      if (cancelled) return;
-      if (error) {
-        setCloudError('Не удалось загрузить расписание. Проверьте подключение и права Supabase.');
-      } else if (!data) {
-        if (scheduleVersionRef.current > 0) return;
-        setLessons([]);
-        scheduleVersionRef.current = 0;
-        setScheduleVersion(0);
-        setScheduleMissing(true);
-        setCloudError('');
-      } else if (!isLessons(data.lessons) || typeof data.version !== 'number') {
-        setCloudError('Сохранённые данные расписания имеют неверный формат.');
-      } else {
-        if (data.version < scheduleVersionRef.current) return;
-        scheduleVersionRef.current = data.version;
-        setLessons(data.lessons);
-        setScheduleVersion(data.version);
-        setScheduleMissing(false);
-        setCloudError('');
+    let requestInFlight = false;
+    const loadSchedule = async (force = false) => {
+      if (cancelled || requestInFlight || (!force && document.visibilityState === 'hidden')) return;
+      requestInFlight = true;
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 15_000);
+      try {
+        const { data, error } = await supabaseClient
+          .from('schedules')
+          .select('lessons, version')
+          .eq('id', 'current')
+          .abortSignal(controller.signal)
+          .maybeSingle();
+        if (cancelled) return;
+        if (error) {
+          setCloudError(controller.signal.aborted
+            ? 'Загрузка расписания заняла слишком много времени. Проверьте подключение и попробуйте снова.'
+            : 'Не удалось загрузить расписание. Проверьте подключение и права Supabase.');
+        } else if (!data) {
+          if (scheduleVersionRef.current > 0) return;
+          setLessons([]);
+          scheduleVersionRef.current = 0;
+          setScheduleVersion(0);
+          setScheduleMissing(true);
+          setCloudError('');
+        } else if (!isLessons(data.lessons) || typeof data.version !== 'number') {
+          setCloudError('Сохранённые данные расписания имеют неверный формат.');
+        } else if (data.version >= scheduleVersionRef.current) {
+          scheduleVersionRef.current = data.version;
+          setLessons(data.lessons);
+          setScheduleVersion(data.version);
+          setScheduleMissing(false);
+          setCloudError('');
+        }
+      } catch {
+        if (!cancelled) {
+          setCloudError(controller.signal.aborted
+            ? 'Загрузка расписания заняла слишком много времени. Проверьте подключение и попробуйте снова.'
+            : 'Не удалось загрузить расписание. Проверьте подключение и права Supabase.');
+        }
+      } finally {
+        window.clearTimeout(timeoutId);
+        requestInFlight = false;
+        if (!cancelled) setScheduleLoading(false);
       }
-      setScheduleLoading(false);
     };
-    void loadSchedule();
-    const interval = window.setInterval(() => void loadSchedule(), 30_000);
+    void loadSchedule(true);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void loadSchedule(true);
+    };
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    const interval = window.setInterval(() => void loadSchedule(), 60_000);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
     };
-  }, [cloudUser, cloudRoleReady, supabaseRole]);
+  }, [cloudUser, cloudRoleReady, supabaseRole, scheduleReloadAttempt]);
 
   // Week offset (0 = current week, 1 = next week, -1 = prev week)
   const [weekOffset, setWeekOffset] = useState(0);
@@ -336,10 +419,15 @@ export default function App() {
   // Save to server
   const saveLessons = async (newLessons: Lesson[]): Promise<boolean> => {
     if (useFirebase) {
-      if (!isAdmin || !firestore) return false;
+      if (!isAdmin) return false;
       try {
-        const scheduleRef = doc(firestore, 'schedules', 'current');
-        const nextVersion = await runTransaction(firestore, async (transaction) => {
+        const [firestoreSdk, firebaseService] = await Promise.all([
+          import('firebase/firestore'),
+          import('./services/firebase'),
+        ]);
+        if (!firebaseService.firestore) throw new Error('Firebase Database is not configured.');
+        const scheduleRef = firestoreSdk.doc(firebaseService.firestore, 'schedules', 'current');
+        const nextVersion = await firestoreSdk.runTransaction(firebaseService.firestore, async (transaction) => {
           const snapshot = await transaction.get(scheduleRef);
           if (!snapshot.exists()) throw new Error('Расписание ещё не создано.');
           const currentVersion = Number(snapshot.data().version);
@@ -416,8 +504,12 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    if (useFirebase && firebaseAuth) {
-      void signOut(firebaseAuth);
+    if (useFirebase) {
+      void Promise.all([import('firebase/auth'), import('./services/firebase')])
+        .then(([authSdk, firebaseService]) => firebaseService.firebaseAuth
+          ? authSdk.signOut(firebaseService.firebaseAuth)
+          : undefined)
+        .catch(() => setCloudError('Не удалось выйти из аккаунта. Проверьте подключение и попробуйте снова.'));
       return;
     }
     if (supabase) {
@@ -428,9 +520,29 @@ export default function App() {
     localStorage.removeItem(ADMIN_STORAGE_KEY);
   };
 
+  const handleRetryCloudLoad = () => {
+    setCloudError('');
+    if (useFirebase && !cloudUser) {
+      window.location.reload();
+      return;
+    }
+    if (useSupabase && cloudUser && !supabaseRole) {
+      setCloudRoleReady(false);
+      setAccessCheckAttempt((attempt) => attempt + 1);
+      return;
+    }
+    setScheduleLoading(true);
+    setScheduleReloadAttempt((attempt) => attempt + 1);
+  };
+
   const handleCloudSignIn = async (email: string, password: string) => {
-    if (firebaseAuth) {
-      await signInWithEmailAndPassword(firebaseAuth, email, password);
+    if (useFirebase) {
+      const [authSdk, firebaseService] = await Promise.all([
+        import('firebase/auth'),
+        import('./services/firebase'),
+      ]);
+      if (!firebaseService.firebaseAuth) throw new Error('Firebase Auth is not configured.');
+      await authSdk.signInWithEmailAndPassword(firebaseService.firebaseAuth, email, password);
       return;
     }
     if (!supabase) throw new Error('Облачный вход не настроен.');
@@ -439,8 +551,13 @@ export default function App() {
   };
 
   const handlePasswordReset = async (email: string) => {
-    if (firebaseAuth) {
-      await sendPasswordResetEmail(firebaseAuth, email);
+    if (useFirebase) {
+      const [authSdk, firebaseService] = await Promise.all([
+        import('firebase/auth'),
+        import('./services/firebase'),
+      ]);
+      if (!firebaseService.firebaseAuth) throw new Error('Firebase Auth is not configured.');
+      await authSdk.sendPasswordResetEmail(firebaseService.firebaseAuth, email);
       return;
     }
     if (supabase) {
@@ -455,8 +572,13 @@ export default function App() {
 
   const handleImportSchedule = async (importedLessons: Lesson[]) => {
     if (!isAdmin) throw new Error('Только владелец может загрузить расписание.');
-    if (useFirebase && firestore) {
-      await setDoc(doc(firestore, 'schedules', 'current'), {
+    if (useFirebase) {
+      const [firestoreSdk, firebaseService] = await Promise.all([
+        import('firebase/firestore'),
+        import('./services/firebase'),
+      ]);
+      if (!firebaseService.firestore) throw new Error('Firebase Database is not configured.');
+      await firestoreSdk.setDoc(firestoreSdk.doc(firebaseService.firestore, 'schedules', 'current'), {
         version: 1,
         updatedAt: new Date().toISOString(),
         lessons: importedLessons,
@@ -503,9 +625,14 @@ export default function App() {
 
   const handleRestoreBackup = async (restoredLessons: Lesson[]) => {
     if (!isAdmin) throw new Error('Только владелец может восстановить расписание.');
-    if (useFirebase && firestore) {
-      const scheduleRef = doc(firestore, 'schedules', 'current');
-      const nextVersion = await runTransaction(firestore, async (transaction) => {
+    if (useFirebase) {
+      const [firestoreSdk, firebaseService] = await Promise.all([
+        import('firebase/firestore'),
+        import('./services/firebase'),
+      ]);
+      if (!firebaseService.firestore) throw new Error('Firebase Database is not configured.');
+      const scheduleRef = firestoreSdk.doc(firebaseService.firestore, 'schedules', 'current');
+      const nextVersion = await firestoreSdk.runTransaction(firebaseService.firestore, async (transaction) => {
         const snapshot = await transaction.get(scheduleRef);
         if (!snapshot.exists()) throw new Error('Запись расписания не найдена.');
         const version = Number(snapshot.data().version);
@@ -717,14 +844,29 @@ export default function App() {
     if (!cloudAuthReady) {
       return <main className={`min-h-screen flex items-center justify-center ${isDark ? 'bg-neutral-950 text-white' : 'bg-[#f5f6f8] text-neutral-900'}`}>Проверяю вход…</main>;
     }
-    if (!cloudUser) {
+    if (!cloudUser && !cloudError) {
       return <CloudLogin isDark={isDark} onSignIn={handleCloudSignIn} onResetPassword={useFirebase ? handlePasswordReset : undefined} />;
     }
     if (!cloudRoleReady) {
-      return <main className={`min-h-screen flex items-center justify-center ${isDark ? 'bg-neutral-950 text-white' : 'bg-[#f5f6f8] text-neutral-900'}`}>Проверяю права доступа…</main>;
+      return (
+        <main className={`min-h-screen flex items-center justify-center p-6 ${isDark ? 'bg-neutral-950 text-white' : 'bg-[#f5f6f8] text-neutral-900'}`}>
+          <div role="status" className="flex flex-col items-center gap-3 text-center">
+            <span aria-hidden="true" className="h-6 w-6 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            <span className="text-sm font-medium">Проверяю права доступа…</span>
+            <span className={`max-w-xs text-xs ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>Если проверка не завершится, появится возможность попробовать снова.</span>
+          </div>
+        </main>
+      );
     }
     if (scheduleLoading) {
-      return <main className={`min-h-screen flex items-center justify-center ${isDark ? 'bg-neutral-950 text-white' : 'bg-[#f5f6f8] text-neutral-900'}`}>Загружаю расписание…</main>;
+      return (
+        <main className={`min-h-screen flex items-center justify-center p-6 ${isDark ? 'bg-neutral-950 text-white' : 'bg-[#f5f6f8] text-neutral-900'}`}>
+          <div role="status" className="flex items-center gap-3 text-sm font-medium">
+            <span aria-hidden="true" className="h-5 w-5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            <span>Загружаю расписание…</span>
+          </div>
+        </main>
+      );
     }
     if (cloudError) {
       return (
@@ -732,7 +874,10 @@ export default function App() {
           <section className={`max-w-md rounded-3xl p-6 shadow-xl ${isDark ? 'bg-neutral-900' : 'bg-white'}`}>
             <h1 className="font-display font-bold text-lg">Не удалось открыть расписание</h1>
             <p className="mt-2 text-sm text-rose-500">{cloudError}</p>
-            <button onClick={handleLogout} className="mt-5 rounded-xl bg-neutral-900 px-4 py-3 text-sm font-semibold text-white">Выйти</button>
+            <div className="mt-5 flex gap-2">
+              <button onClick={handleRetryCloudLoad} className={`flex-1 rounded-xl px-4 py-3 text-sm font-semibold ${isDark ? 'bg-white text-neutral-900' : 'bg-neutral-900 text-white'}`}>Попробовать снова</button>
+              {cloudUser && <button onClick={handleLogout} className={`rounded-xl px-4 py-3 text-sm font-semibold ${isDark ? 'bg-neutral-800 text-neutral-200' : 'bg-neutral-100 text-neutral-700'}`}>Выйти</button>}
+            </div>
           </section>
         </main>
       );

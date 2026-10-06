@@ -42,11 +42,6 @@
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.01em;
   }
-
-  .font-mono-numbers {
-    font-family: 'JetBrains Mono', monospace;
-    font-variant-numeric: tabular-nums;
-  }
 }
 
 /* Custom scrollbar and hide utilities */
