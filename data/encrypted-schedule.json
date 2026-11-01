@@ -1,0 +1,8 @@
+{
+  "format": "aes-256-gcm-pbkdf2",
+  "version": 1,
+  "updatedAt": "2026-11-01T21:38:50.474Z",
+  "salt": "mYnz+Sv6YkC+ewEqNwi/aA==",
+  "iv": "ybd2ku2BINUNcG+h",
+  "ciphertext": "jfP/+UAcc7iS1tZ1uHk+c/IH5KyEPN/ukYAUm/TCeXY2DN7r1J6RsPft1q27oHeB5O4+3lBioERmKvTYtQLXqVNBCnJ9qPgmHug2lsJxkzT+"
+}

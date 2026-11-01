@@ -1,14 +1,15 @@
 import React, { useRef, useState } from 'react';
-import { X, Lock, Unlock, Share2, Check, KeyRound, Moon, Sun, Bell, BellRing, BellOff } from 'lucide-react';
+import { X, Lock, Unlock, Share2, Check, KeyRound, Moon, Sun, Bell, BellRing } from 'lucide-react';
 import { NotificationPermissionState } from '../utils/notificationService';
 import { Lesson } from '../types';
 import { parseLessonsJson } from '../utils/scheduleValidation';
+import { buildViewerShareUrl, getSavedAccessCode } from '../services/githubStorage';
 
 interface MobileActionMenuProps {
   isOpen: boolean;
   onClose: () => void;
   isAdmin: boolean;
-  isCloudMode: boolean;
+  isCloudMode?: boolean;
   currentLessons: Lesson[];
   onExportBackup: () => void;
   onImportBackup: (lessons: Lesson[]) => Promise<void>;
@@ -27,7 +28,6 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
   isOpen,
   onClose,
   isAdmin,
-  isCloudMode,
   currentLessons,
   onExportBackup,
   onImportBackup,
@@ -57,7 +57,8 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
   if (!isOpen) return null;
 
   const handleShare = () => {
-    navigator.clipboard.writeText(window.location.href);
+    const shareUrl = buildViewerShareUrl(getSavedAccessCode());
+    navigator.clipboard.writeText(shareUrl);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
   };
@@ -86,9 +87,10 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
   const handleChangePinSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newPin.trim()) return;
+    setPinStatus('Перешифровываю расписание…');
     const ok = await onChangePin(currPin.trim(), newPin.trim());
     if (ok) {
-      setPinStatus('PIN успешно изменён!');
+      setPinStatus('Код доступа успешно изменён!');
       setTimeout(() => {
         setIsChangingPin(false);
         setPinStatus(null);
@@ -96,7 +98,7 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
         setNewPin('');
       }, 1500);
     } else {
-      setPinStatus('Ошибка! Проверьте текущий PIN.');
+      setPinStatus('Ошибка! Проверьте текущий код доступа.');
     }
   };
 
@@ -162,11 +164,11 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
   };
 
   return (
-    <div 
+    <div
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150"
       onClick={onClose}
     >
-      <div 
+      <div
         className={`w-full sm:max-w-sm rounded-t-[32px] sm:rounded-3xl p-5 sm:p-6 shadow-2xl max-h-[90vh] overflow-y-auto pb-safe transition-colors ${
           isDark ? 'bg-neutral-900 text-white' : 'bg-white text-neutral-900'
         }`}
@@ -190,40 +192,38 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
           </button>
         </div>
 
-        {/* Change PIN view if opened */}
+        {/* Change Access Code view if opened */}
         {isChangingPin ? (
           <form onSubmit={handleChangePinSubmit} className="space-y-3 pb-2">
             <span className={`text-xs font-semibold block ${isDark ? 'text-neutral-200' : 'text-neutral-800'}`}>
-              Смена PIN-кода администратора
+              Смена кода доступа к расписанию
             </span>
             <input
               type="password"
-              inputMode="numeric"
-              placeholder="Текущий PIN"
+              placeholder="Текущий код доступа"
               value={currPin}
               onChange={(e) => setCurrPin(e.target.value)}
               required
               className={`w-full px-3 py-2.5 rounded-2xl text-sm font-mono text-center focus:outline-none focus:ring-2 ${
-                isDark 
-                  ? 'bg-neutral-800 text-white focus:ring-white' 
+                isDark
+                  ? 'bg-neutral-800 text-white focus:ring-white'
                   : 'bg-neutral-100 text-neutral-900 focus:ring-neutral-900'
               }`}
             />
             <input
               type="password"
-              inputMode="numeric"
-              placeholder="Новый PIN"
+              placeholder="Новый код доступа"
               value={newPin}
               onChange={(e) => setNewPin(e.target.value)}
               required
               className={`w-full px-3 py-2.5 rounded-2xl text-sm font-mono text-center focus:outline-none focus:ring-2 ${
-                isDark 
-                  ? 'bg-neutral-800 text-white focus:ring-white' 
+                isDark
+                  ? 'bg-neutral-800 text-white focus:ring-white'
                   : 'bg-neutral-100 text-neutral-900 focus:ring-neutral-900'
               }`}
             />
             {pinStatus && (
-              <p className={`text-xs text-center font-medium ${pinStatus.includes('успешно') ? 'text-emerald-500' : 'text-rose-500'}`}>
+              <p className={`text-xs text-center font-medium ${pinStatus.includes('успешно') ? 'text-emerald-500' : pinStatus.includes('Ошибка') ? 'text-rose-500' : 'text-amber-500'}`}>
                 {pinStatus}
               </p>
             )}
@@ -251,8 +251,8 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
           <div className="space-y-2">
             {/* Notifications Toggle */}
             <div className={`p-3.5 rounded-2xl transition-all ${
-              isDark 
-                ? 'bg-neutral-800 text-white' 
+              isDark
+                ? 'bg-neutral-800 text-white'
                 : 'bg-neutral-100/70 text-neutral-800'
             }`}>
               <button
@@ -262,8 +262,8 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
               >
                 <div className="flex items-center gap-3">
                   <div className={`p-2 rounded-xl ${
-                    notificationsEnabled 
-                      ? 'bg-emerald-500 text-white shadow-2xs' 
+                    notificationsEnabled
+                      ? 'bg-emerald-500 text-white shadow-2xs'
                       : isDark ? 'bg-neutral-700 text-neutral-300' : 'bg-white text-neutral-600 shadow-2xs'
                   }`}>
                     {notificationsEnabled ? <BellRing className="w-4 h-4" /> : <Bell className="w-4 h-4" />}
@@ -273,8 +273,8 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
                       <span>Уведомления за 10 мин</span>
                     </div>
                     <div className={`text-[11px] font-normal ${
-                      notificationPermission === 'denied' 
-                        ? 'text-rose-400 font-medium' 
+                      notificationPermission === 'denied'
+                        ? 'text-rose-400 font-medium'
                         : isDark ? 'text-neutral-400' : 'text-neutral-500'
                     }`}>
                       {notificationPermission === 'denied'
@@ -297,7 +297,6 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
                 </div>
               </button>
 
-              {/* Sub-actions when enabled: Test button */}
               {notificationsEnabled && (
                 <div className={`mt-3 pt-2.5 border-t flex items-center justify-between text-xs ${
                   isDark ? 'border-neutral-700/60' : 'border-neutral-200/80'
@@ -321,7 +320,6 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
                 </div>
               )}
 
-              {/* Error notice if permission blocked */}
               {notifError && (
                 <div className="mt-2.5 p-2 rounded-xl bg-rose-500/10 text-rose-400 text-xs leading-snug">
                   {notifError}
@@ -334,8 +332,8 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
               type="button"
               onClick={onToggleTheme}
               className={`w-full p-3.5 rounded-2xl flex items-center justify-between text-left transition-all active:scale-[0.98] ${
-                isDark 
-                  ? 'bg-neutral-800 text-white hover:bg-neutral-700/80' 
+                isDark
+                  ? 'bg-neutral-800 text-white hover:bg-neutral-700/80'
                   : 'bg-neutral-100/70 text-neutral-800 hover:bg-neutral-100'
               }`}
             >
@@ -362,8 +360,8 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
               type="button"
               onClick={handleShare}
               className={`w-full p-3.5 rounded-2xl flex items-center justify-between text-left transition-all active:scale-[0.98] ${
-                isDark 
-                  ? 'bg-neutral-800 text-white hover:bg-neutral-700/80' 
+                isDark
+                  ? 'bg-neutral-800 text-white hover:bg-neutral-700/80'
                   : 'bg-neutral-100/70 text-neutral-800 hover:bg-neutral-100'
               }`}
             >
@@ -374,7 +372,7 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
                 <div>
                   <div className="text-sm leading-tight font-semibold">Поделиться расписанием</div>
                   <div className={`text-[11px] font-normal ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
-                    Скопировать ссылку для второго человека
+                    Скопировать готовую ссылку со входом для зрителя
                   </div>
                 </div>
               </div>
@@ -387,56 +385,39 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
             </button>
 
             {/* Admin Access Switch */}
-            {isCloudMode ? (
-              <div className="pt-1">
-                {isAdmin && (
-                  <div className={`mb-2 rounded-2xl p-3 ${isDark ? 'bg-neutral-800' : 'bg-neutral-100/70'}`}>
-                    <div className="flex gap-2">
-                      <button type="button" onClick={onExportBackup} className={`flex-1 rounded-xl px-3 py-2.5 text-xs font-semibold ${isDark ? 'bg-neutral-700 text-white' : 'bg-white text-neutral-800'}`}>Скачать копию</button>
-                      <button type="button" disabled={backupBusy} onClick={() => backupInputRef.current?.click()} className={`flex-1 rounded-xl px-3 py-2.5 text-xs font-semibold disabled:opacity-60 ${isDark ? 'bg-neutral-700 text-white' : 'bg-white text-neutral-800'}`}>Импортировать JSON</button>
-                    </div>
-                    <input ref={backupInputRef} type="file" accept="application/json,.json" className="sr-only" onChange={handleRestoreBackup} />
-                    {pendingImportLessons && (
-                      <div className={`mt-3 space-y-2 rounded-xl p-3 ${isDark ? 'bg-neutral-900' : 'bg-white'}`}>
-                        <p className={`text-[11px] ${isDark ? 'text-neutral-300' : 'text-neutral-600'}`}>
-                          В файле занятий: {pendingImportLessons.length}. Добавить к текущим или заменить всё расписание?
-                        </p>
-                        <button type="button" disabled={backupBusy} onClick={() => void applyImportedLessons('add')} className={`w-full rounded-lg px-3 py-2 text-xs font-semibold disabled:opacity-60 ${isDark ? 'bg-neutral-700 text-white' : 'bg-neutral-100 text-neutral-800'}`}>
-                          {backupBusy ? 'Сохраняю…' : 'Добавить только новые'}
-                        </button>
-                        <button type="button" disabled={backupBusy} onClick={() => void applyImportedLessons('replace')} className={`w-full rounded-lg px-3 py-2 text-xs font-semibold disabled:opacity-60 ${isDark ? 'bg-neutral-700 text-white' : 'bg-neutral-100 text-neutral-800'}`}>
-                          Заменить расписание
-                        </button>
-                        <button type="button" disabled={backupBusy} onClick={() => { setPendingImportLessons(null); setBackupMessage(null); }} className={`w-full py-1 text-[11px] disabled:opacity-60 ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
-                          Отмена
-                        </button>
-                      </div>
-                    )}
-                    {backupMessage && <p role="status" className={`mt-2 text-[11px] ${backupError ? 'text-rose-500' : isDark ? 'text-emerald-400' : 'text-emerald-700'}`}>{backupMessage}</p>}
-                  </div>
-                )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    onLogoutAdmin();
-                    onClose();
-                  }}
-                  className={`w-full py-3.5 px-4 rounded-2xl text-xs font-semibold flex items-center justify-center gap-2 active:scale-[0.98] transition-all ${
-                    isDark ? 'bg-white text-neutral-900 hover:bg-neutral-200' : 'bg-neutral-900 text-white hover:bg-neutral-800'
-                  }`}
-                >
-                  <Unlock className="w-4 h-4 text-emerald-500" />
-                  <span>Выйти из аккаунта</span>
-                </button>
-              </div>
-            ) : isAdmin ? (
+            {isAdmin ? (
               <div className="space-y-2 pt-1">
+                <div className={`rounded-2xl p-3 ${isDark ? 'bg-neutral-800' : 'bg-neutral-100/70'}`}>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={onExportBackup} className={`flex-1 rounded-xl px-3 py-2.5 text-xs font-semibold ${isDark ? 'bg-neutral-700 text-white' : 'bg-white text-neutral-800'}`}>Скачать копию</button>
+                    <button type="button" disabled={backupBusy} onClick={() => backupInputRef.current?.click()} className={`flex-1 rounded-xl px-3 py-2.5 text-xs font-semibold disabled:opacity-60 ${isDark ? 'bg-neutral-700 text-white' : 'bg-white text-neutral-800'}`}>Импортировать JSON</button>
+                  </div>
+                  <input ref={backupInputRef} type="file" accept="application/json,.json" className="sr-only" onChange={handleRestoreBackup} />
+                  {pendingImportLessons && (
+                    <div className={`mt-3 space-y-2 rounded-xl p-3 ${isDark ? 'bg-neutral-900' : 'bg-white'}`}>
+                      <p className={`text-[11px] ${isDark ? 'text-neutral-300' : 'text-neutral-600'}`}>
+                        В файле занятий: {pendingImportLessons.length}. Добавить к текущим или заменить всё расписание?
+                      </p>
+                      <button type="button" disabled={backupBusy} onClick={() => void applyImportedLessons('add')} className={`w-full rounded-lg px-3 py-2 text-xs font-semibold disabled:opacity-60 ${isDark ? 'bg-neutral-700 text-white' : 'bg-neutral-100 text-neutral-800'}`}>
+                        {backupBusy ? 'Сохраняю…' : 'Добавить только новые'}
+                      </button>
+                      <button type="button" disabled={backupBusy} onClick={() => void applyImportedLessons('replace')} className={`w-full rounded-lg px-3 py-2 text-xs font-semibold disabled:opacity-60 ${isDark ? 'bg-neutral-700 text-white' : 'bg-neutral-100 text-neutral-800'}`}>
+                        Заменить расписание
+                      </button>
+                      <button type="button" disabled={backupBusy} onClick={() => { setPendingImportLessons(null); setBackupMessage(null); }} className={`w-full py-1 text-[11px] disabled:opacity-60 ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                        Отмена
+                      </button>
+                    </div>
+                  )}
+                  {backupMessage && <p role="status" className={`mt-2 text-[11px] ${backupError ? 'text-rose-500' : isDark ? 'text-emerald-400' : 'text-emerald-700'}`}>{backupMessage}</p>}
+                </div>
+
                 <button
                   type="button"
                   onClick={() => setIsChangingPin(true)}
                   className={`w-full p-3.5 rounded-2xl flex items-center justify-between text-left transition-all active:scale-[0.98] ${
-                    isDark 
-                      ? 'bg-neutral-800 text-white hover:bg-neutral-700/80' 
+                    isDark
+                      ? 'bg-neutral-800 text-white hover:bg-neutral-700/80'
                       : 'bg-neutral-100/70 text-neutral-800 hover:bg-neutral-100'
                   }`}
                 >
@@ -445,9 +426,9 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
                       <KeyRound className="w-4 h-4" />
                     </div>
                     <div>
-                      <div className="text-sm leading-tight font-semibold">Сменить PIN-код</div>
+                      <div className="text-sm leading-tight font-semibold">Сменить код доступа</div>
                       <div className={`text-[11px] font-normal ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
-                        Изменить код доступа админа
+                        Перешифровать расписание новым паролем / PIN
                       </div>
                     </div>
                   </div>
@@ -460,8 +441,8 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
                     onClose();
                   }}
                   className={`w-full py-3.5 px-4 rounded-2xl text-xs font-semibold flex items-center justify-center gap-2 active:scale-[0.98] transition-all ${
-                    isDark 
-                      ? 'bg-white text-neutral-900 hover:bg-neutral-200' 
+                    isDark
+                      ? 'bg-white text-neutral-900 hover:bg-neutral-200'
                       : 'bg-neutral-900 text-white hover:bg-neutral-800'
                   }`}
                 >
@@ -478,13 +459,13 @@ export const MobileActionMenu: React.FC<MobileActionMenuProps> = ({
                     onOpenPinModal();
                   }}
                   className={`w-full py-3.5 px-4 rounded-2xl text-xs font-semibold flex items-center justify-center gap-2 active:scale-[0.98] transition-all shadow-xs ${
-                    isDark 
-                      ? 'bg-white text-neutral-900 hover:bg-neutral-200' 
+                    isDark
+                      ? 'bg-white text-neutral-900 hover:bg-neutral-200'
                       : 'bg-neutral-900 text-white hover:bg-neutral-800'
                   }`}
                 >
                   <Lock className="w-4 h-4" />
-                  <span>Войти как администратор (PIN: 1234)</span>
+                  <span>Войти как администратор</span>
                 </button>
               </div>
             )}

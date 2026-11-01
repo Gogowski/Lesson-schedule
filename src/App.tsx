@@ -2,63 +2,57 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Lesson, DayKey } from './types';
 import { formatLocalDate, getCurrentDayKey, timeToMinutes, getWeekDaysInfo, parseLocalDate } from './utils/timeUtils';
 import { getDateForDayInWeek, getWeekdayOrdinal, isLessonScheduledOnDate } from './utils/recurrence';
-import { 
-  checkLessonNotifications, 
-  getNotificationsEnabled, 
-  setNotificationsEnabled, 
-  getNotificationPermission, 
-  requestNotificationAccess, 
-  sendTestNotification, 
-  NotificationPermissionState 
+import {
+  checkLessonNotifications,
+  getNotificationsEnabled,
+  setNotificationsEnabled,
+  getNotificationPermission,
+  requestNotificationAccess,
+  sendTestNotification,
+  NotificationPermissionState,
 } from './utils/notificationService';
 import { EditLessonModal } from './components/EditLessonModal';
 import { PinModal } from './components/PinModal';
-import { CloudLogin } from './components/CloudLogin';
-import { CloudScheduleSetup } from './components/CloudScheduleSetup';
+import { ScheduleLockScreen } from './components/ScheduleLockScreen';
 import { MobileActionMenu } from './components/MobileActionMenu';
-import { firebaseConfigured, scheduleEditorUid } from './services/firebaseConfig';
-import { supabase, supabaseConfigured } from './services/supabase';
-import { isLessons } from './utils/scheduleValidation';
-import { 
-  Plus, 
-  Edit2, 
-  Trash2, 
-  Copy, 
-  Check, 
-  MoreHorizontal, 
-  ChevronLeft, 
-  ChevronRight, 
-  Clock, 
-  CheckCircle2 
+import {
+  consumeUrlHashCredentials,
+  decryptScheduleEnvelope,
+  fetchEncryptedSchedule,
+  saveEncryptedSchedule,
+  setSavedAccessCode,
+  setSavedGitHubToken,
+  verifyGitHubToken,
+} from './services/githubStorage';
+import {
+  Plus,
+  Edit2,
+  Trash2,
+  Copy,
+  Check,
+  MoreHorizontal,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  CheckCircle2,
 } from 'lucide-react';
 
-const ADMIN_STORAGE_KEY = 'online_schedule_admin_pin';
-const authProvider = supabaseConfigured ? 'supabase' : firebaseConfigured ? 'firebase' : 'local';
-const useSupabase = authProvider === 'supabase';
-const useFirebase = authProvider === 'firebase';
-const cloudConfigured = authProvider !== 'local';
+const initialCreds = consumeUrlHashCredentials();
 
 export default function App() {
-  const [cloudUser, setCloudUser] = useState<{ uid: string } | null>(null);
-  const [cloudAuthReady, setCloudAuthReady] = useState(!cloudConfigured);
-  const [cloudRoleReady, setCloudRoleReady] = useState(!useSupabase);
-  const [supabaseRole, setSupabaseRole] = useState<'editor' | 'viewer' | null>(null);
-  const [accessCheckAttempt, setAccessCheckAttempt] = useState(0);
+  const [accessCode, setAccessCode] = useState<string>(() => initialCreds.accessCode);
+  const [githubToken, setGithubToken] = useState<string>(() => initialCreds.githubToken);
+  const [lockError, setLockError] = useState<string>('');
   const [scheduleReloadAttempt, setScheduleReloadAttempt] = useState(0);
-  const [scheduleLoading, setScheduleLoading] = useState(cloudConfigured);
-  const [scheduleMissing, setScheduleMissing] = useState(false);
+  const [scheduleLoading, setScheduleLoading] = useState<boolean>(() => Boolean(initialCreds.accessCode));
   const [scheduleVersion, setScheduleVersion] = useState(0);
   const scheduleVersionRef = useRef(0);
-  const lastAuthUserIdRef = useRef<string | null>(null);
+  const scheduleShaRef = useRef<string | undefined>(undefined);
   const [cloudError, setCloudError] = useState('');
   const [lessons, setLessons] = useState<Lesson[]>([]);
   const [activeDay, setActiveDay] = useState<DayKey | 'all'>(() => getCurrentDayKey());
-  const [adminPin, setAdminPin] = useState<string | null>(() => localStorage.getItem(ADMIN_STORAGE_KEY));
-  const isAdmin = useFirebase
-    ? Boolean(cloudUser && scheduleEditorUid && cloudUser.uid === scheduleEditorUid)
-    : useSupabase
-      ? supabaseRole === 'editor'
-      : Boolean(adminPin);
+
+  const isAdmin = Boolean(githubToken);
 
   // Dark mode state: default to saved or dark preference
   const [isDark, setIsDark] = useState<boolean>(() => {
@@ -89,214 +83,49 @@ export default function App() {
     );
   }, [isDark]);
 
+  // Load and poll encrypted schedule from GitHub API
   useEffect(() => {
-    if (useFirebase) {
-      let cancelled = false;
-      let unsubscribe: (() => void) | undefined;
-      void Promise.all([import('firebase/auth'), import('./services/firebase')])
-        .then(([authSdk, firebaseService]) => {
-          if (cancelled) return;
-          if (!firebaseService.firebaseAuth) {
-            setCloudError('Не удалось настроить Firebase Auth.');
-            setCloudAuthReady(true);
-            return;
-          }
-          unsubscribe = authSdk.onAuthStateChanged(firebaseService.firebaseAuth, (user) => {
-            setCloudUser(user ? { uid: user.uid } : null);
-            setCloudAuthReady(true);
-          });
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setCloudError('Не удалось загрузить модуль входа. Проверьте подключение и перезагрузите страницу.');
-          setCloudAuthReady(true);
-          setScheduleLoading(false);
-        });
-      return () => {
-        cancelled = true;
-        unsubscribe?.();
-      };
-    }
-    if (!supabase) return;
-    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
-      const nextUserId = session?.user.id ?? null;
-      if (lastAuthUserIdRef.current !== nextUserId) {
-        lastAuthUserIdRef.current = nextUserId;
-        setCloudUser(nextUserId ? { uid: nextUserId } : null);
-        setSupabaseRole(null);
-        setCloudRoleReady(!nextUserId);
-        if (!nextUserId) setCloudError('');
-      }
-      setCloudAuthReady(true);
-    });
-    return () => authListener.subscription.unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    if (!useSupabase || !supabase) {
-      setCloudRoleReady(true);
-      return;
-    }
-    if (!cloudUser) {
-      setSupabaseRole(null);
-      setCloudRoleReady(true);
-      setCloudError('');
-      return;
-    }
-
-    let cancelled = false;
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), 12_000);
-    setCloudRoleReady(false);
-    setCloudError('');
-    void (async () => {
-      try {
-        const { data, error } = await supabase
-          .from('schedule_access')
-          .select('role')
-          .eq('user_id', cloudUser.uid)
-          .abortSignal(controller.signal)
-          .maybeSingle();
-        if (cancelled) return;
-        if (error) {
-          setSupabaseRole(null);
-          setCloudError(controller.signal.aborted
-            ? 'Проверка прав заняла слишком много времени. Проверьте подключение и попробуйте снова.'
-            : 'Не удалось проверить права пользователя. Проверьте подключение и попробуйте снова.');
-        } else if (data?.role === 'editor' || data?.role === 'viewer') {
-          setSupabaseRole(data.role);
-        } else {
-          setSupabaseRole(null);
-          setCloudError('У этого аккаунта нет доступа к расписанию.');
-        }
-      } catch {
-        if (cancelled) return;
-        setSupabaseRole(null);
-        setCloudError(controller.signal.aborted
-          ? 'Проверка прав заняла слишком много времени. Проверьте подключение и попробуйте снова.'
-          : 'Не удалось проверить права пользователя. Проверьте подключение и попробуйте снова.');
-      } finally {
-        window.clearTimeout(timeoutId);
-        if (!cancelled) setCloudRoleReady(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timeoutId);
-      controller.abort();
-    };
-  }, [cloudUser, accessCheckAttempt]);
-
-  useEffect(() => {
-    if (!cloudConfigured) return;
-    if (!cloudUser) {
-      setLessons([]);
-      scheduleVersionRef.current = 0;
-      setScheduleVersion(0);
+    if (!accessCode) {
       setScheduleLoading(false);
-      setScheduleMissing(false);
-      setCloudError('');
-      return;
-    }
-    if (useSupabase && !cloudRoleReady) return;
-    if (useSupabase && !supabaseRole) {
-      setLessons([]);
-      setScheduleLoading(false);
-      setScheduleMissing(false);
       return;
     }
 
-    setScheduleLoading(true);
-    setScheduleMissing(false);
-    setCloudError('');
-    if (useFirebase) {
-      let cancelled = false;
-      let unsubscribe: (() => void) | undefined;
-      void Promise.all([import('firebase/firestore'), import('./services/firebase')])
-        .then(([firestoreSdk, firebaseService]) => {
-          if (cancelled) return;
-          if (!firebaseService.firestore) throw new Error('Firebase database is not configured.');
-          const scheduleRef = firestoreSdk.doc(firebaseService.firestore, 'schedules', 'current');
-          unsubscribe = firestoreSdk.onSnapshot(scheduleRef, (snapshot) => {
-            if (!snapshot.exists()) {
-              if (scheduleVersionRef.current > 0) return;
-              setLessons([]);
-              scheduleVersionRef.current = 0;
-              setScheduleVersion(0);
-              setScheduleMissing(true);
-            } else {
-              const data = snapshot.data();
-              if (!isLessons(data.lessons) || typeof data.version !== 'number') {
-                setCloudError('Сохранённые данные расписания имеют неверный формат.');
-              } else if (data.version >= scheduleVersionRef.current) {
-                scheduleVersionRef.current = data.version;
-                setLessons(data.lessons);
-                setScheduleVersion(data.version);
-                setScheduleMissing(false);
-                setCloudError('');
-              }
-            }
-            setScheduleLoading(false);
-          }, (error) => {
-            setCloudError(error.code === 'permission-denied'
-              ? 'У этого аккаунта нет доступа к расписанию. Проверьте список разрешённых пользователей.'
-              : 'Не удалось загрузить расписание. Проверьте подключение и настройки Firebase.');
-            setScheduleLoading(false);
-          });
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setCloudError('Не удалось загрузить модуль расписания. Проверьте подключение и попробуйте снова.');
-          setScheduleLoading(false);
-        });
-      return () => {
-        cancelled = true;
-        unsubscribe?.();
-      };
-    }
-
-    const supabaseClient = supabase;
-    if (!supabaseClient) return;
     let cancelled = false;
     let requestInFlight = false;
+
     const loadSchedule = async (force = false) => {
       if (cancelled || requestInFlight || (!force && document.visibilityState === 'hidden')) return;
       requestInFlight = true;
       const controller = new AbortController();
-      const timeoutId = window.setTimeout(() => controller.abort(), 15_000);
+      const timeoutId = window.setTimeout(() => controller.abort(), 12_000);
       try {
-        const { data, error } = await supabaseClient
-          .from('schedules')
-          .select('lessons, version')
-          .eq('id', 'current')
-          .abortSignal(controller.signal)
-          .maybeSingle();
+        const { envelope, sha } = await fetchEncryptedSchedule(controller.signal);
         if (cancelled) return;
-        if (error) {
-          setCloudError(controller.signal.aborted
-            ? 'Загрузка расписания заняла слишком много времени. Проверьте подключение и попробуйте снова.'
-            : 'Не удалось загрузить расписание. Проверьте подключение и права Supabase.');
-        } else if (!data) {
-          if (scheduleVersionRef.current > 0) return;
-          setLessons([]);
-          scheduleVersionRef.current = 0;
-          setScheduleVersion(0);
-          setScheduleMissing(true);
-          setCloudError('');
-        } else if (!isLessons(data.lessons) || typeof data.version !== 'number') {
-          setCloudError('Сохранённые данные расписания имеют неверный формат.');
-        } else if (data.version >= scheduleVersionRef.current) {
-          scheduleVersionRef.current = data.version;
-          setLessons(data.lessons);
-          setScheduleVersion(data.version);
-          setScheduleMissing(false);
-          setCloudError('');
+        const payload = await decryptScheduleEnvelope(envelope, accessCode);
+        if (cancelled) return;
+
+        scheduleShaRef.current = sha;
+        if (payload.version >= scheduleVersionRef.current) {
+          scheduleVersionRef.current = payload.version;
+          setScheduleVersion(payload.version);
+          setLessons(payload.lessons);
         }
-      } catch {
-        if (!cancelled) {
-          setCloudError(controller.signal.aborted
-            ? 'Загрузка расписания заняла слишком много времени. Проверьте подключение и попробуйте снова.'
-            : 'Не удалось загрузить расписание. Проверьте подключение и права Supabase.');
+        setCloudError('');
+        setLockError('');
+      } catch (err) {
+        if (cancelled) return;
+        if (err instanceof Error && err.message === 'INVALID_ACCESS_CODE') {
+          setSavedAccessCode(null);
+          setAccessCode('');
+          setLockError('Код доступа не подошёл. Введите актуальный код доступа.');
+        } else if (scheduleVersionRef.current === 0) {
+          setCloudError(
+            controller.signal.aborted
+              ? 'Превышено время ожидания ответа от GitHub. Проверьте интернет.'
+              : err instanceof Error
+              ? err.message
+              : 'Не удалось загрузить расписание с GitHub.'
+          );
         }
       } finally {
         window.clearTimeout(timeoutId);
@@ -304,18 +133,56 @@ export default function App() {
         if (!cancelled) setScheduleLoading(false);
       }
     };
+
+    setScheduleLoading(scheduleVersionRef.current === 0);
     void loadSchedule(true);
+
     const refreshWhenVisible = () => {
       if (document.visibilityState === 'visible') void loadSchedule(true);
     };
     document.addEventListener('visibilitychange', refreshWhenVisible);
-    const interval = window.setInterval(() => void loadSchedule(), 60_000);
+    const interval = window.setInterval(() => void loadSchedule(), 30_000);
+
     return () => {
       cancelled = true;
       window.clearInterval(interval);
       document.removeEventListener('visibilitychange', refreshWhenVisible);
     };
-  }, [cloudUser, cloudRoleReady, supabaseRole, scheduleReloadAttempt]);
+  }, [accessCode, scheduleReloadAttempt]);
+
+  const handleUnlock = async (enteredCode: string, enteredToken?: string) => {
+    if (enteredToken) {
+      const validToken = await verifyGitHubToken(enteredToken);
+      if (!validToken) {
+        throw new Error('Токен GitHub не подошёл или не имеет прав записи в репозиторий.');
+      }
+    }
+
+    const { envelope, sha } = await fetchEncryptedSchedule();
+    let payload;
+    try {
+      payload = await decryptScheduleEnvelope(envelope, enteredCode);
+    } catch (err) {
+      if (err instanceof Error && err.message === 'INVALID_ACCESS_CODE') {
+        throw new Error('Неверный код доступа к расписанию.');
+      }
+      throw err;
+    }
+
+    setSavedAccessCode(enteredCode);
+    setAccessCode(enteredCode);
+    if (enteredToken) {
+      setSavedGitHubToken(enteredToken);
+      setGithubToken(enteredToken);
+    }
+    scheduleShaRef.current = sha;
+    scheduleVersionRef.current = payload.version;
+    setScheduleVersion(payload.version);
+    setLessons(payload.lessons);
+    setLockError('');
+    setCloudError('');
+    setScheduleLoading(false);
+  };
 
   // Week offset (0 = current week, 1 = next week, -1 = prev week)
   const [weekOffset, setWeekOffset] = useState(0);
@@ -350,7 +217,6 @@ export default function App() {
 
   // Periodic time update & lesson notification checks
   useEffect(() => {
-    // Initial check on mount
     checkLessonNotifications(lessons);
 
     const timer = setInterval(() => {
@@ -393,223 +259,46 @@ export default function App() {
     return sendTestNotification();
   };
 
-  // Fetch from server
-  const fetchSchedule = useCallback(async () => {
-    if (cloudConfigured) return;
-    try {
-      const res = await fetch('/api/schedule');
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data.lessons)) {
-          setLessons(data.lessons);
-        }
-      }
-    } catch {
-      // offline grace
-    }
-  }, []);
-
-  useEffect(() => {
-    if (cloudConfigured) return;
-    fetchSchedule();
-    const interval = setInterval(fetchSchedule, 15000);
-      return () => clearInterval(interval);
-  }, [fetchSchedule]);
-
-  // Save to server
+  // Save to GitHub
   const saveLessons = async (newLessons: Lesson[]): Promise<boolean> => {
-    if (useFirebase) {
-      if (!isAdmin) return false;
-      try {
-        const [firestoreSdk, firebaseService] = await Promise.all([
-          import('firebase/firestore'),
-          import('./services/firebase'),
-        ]);
-        if (!firebaseService.firestore) throw new Error('Firebase Database is not configured.');
-        const scheduleRef = firestoreSdk.doc(firebaseService.firestore, 'schedules', 'current');
-        const nextVersion = await firestoreSdk.runTransaction(firebaseService.firestore, async (transaction) => {
-          const snapshot = await transaction.get(scheduleRef);
-          if (!snapshot.exists()) throw new Error('Расписание ещё не создано.');
-          const currentVersion = Number(snapshot.data().version);
-          if (currentVersion !== scheduleVersionRef.current) {
-            throw new Error('Расписание изменилось в другом окне. Обновите страницу и повторите правку.');
-          }
-          transaction.update(scheduleRef, {
-            lessons: newLessons,
-            version: currentVersion + 1,
-            updatedAt: new Date().toISOString(),
-          });
-          return currentVersion + 1;
-        });
-        if (nextVersion >= scheduleVersionRef.current) {
-          scheduleVersionRef.current = nextVersion;
-          setScheduleVersion(nextVersion);
-          setLessons(newLessons);
-        }
-        return true;
-      } catch (error) {
-        window.alert(error instanceof Error ? error.message : 'Не удалось сохранить расписание.');
-        return false;
-      }
-    }
-
-    if (useSupabase) {
-      if (!isAdmin || !supabase) return false;
-      const expectedVersion = scheduleVersionRef.current;
-      const nextVersion = expectedVersion + 1;
-      try {
-        const { data, error } = await supabase
-          .from('schedules')
-          .update({ lessons: newLessons, version: nextVersion, updated_at: new Date().toISOString() })
-          .eq('id', 'current')
-          .eq('version', expectedVersion)
-          .select('version')
-          .maybeSingle();
-        if (error) throw error;
-        if (!data) throw new Error('Расписание изменилось в другом окне. Обновите страницу и повторите правку.');
-        const savedVersion = Number(data.version);
-        if (Number.isFinite(savedVersion) && savedVersion >= scheduleVersionRef.current) {
-          scheduleVersionRef.current = savedVersion;
-          setScheduleVersion(savedVersion);
-          setLessons(newLessons);
-        }
-        return true;
-      } catch (error) {
-        window.alert(error instanceof Error ? error.message : 'Не удалось сохранить расписание.');
-        return false;
-      }
-    }
-
-    if (!isAdmin) return false;
-    if (!adminPin) return false;
-
+    if (!isAdmin || !githubToken || !accessCode) return false;
     try {
-      const response = await fetch('/api/schedule', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin: adminPin, lessons: newLessons }),
-      });
-      if (!response.ok) throw new Error('Не удалось сохранить расписание на сервере.');
+      const { version, sha } = await saveEncryptedSchedule(
+        newLessons,
+        accessCode,
+        githubToken,
+        scheduleVersionRef.current,
+        scheduleShaRef.current
+      );
+      scheduleVersionRef.current = version;
+      scheduleShaRef.current = sha;
+      setScheduleVersion(version);
       setLessons(newLessons);
       return true;
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Не удалось сохранить расписание.');
+      window.alert(error instanceof Error ? error.message : 'Не удалось сохранить расписание в GitHub.');
       return false;
     }
   };
 
-  const handleAdminSuccess = (pin: string) => {
-    setAdminPin(pin);
-    localStorage.setItem(ADMIN_STORAGE_KEY, pin);
+  const handleAdminSuccess = (token: string) => {
+    setGithubToken(token);
+    setSavedGitHubToken(token);
   };
 
   const handleLogout = () => {
-    if (useFirebase) {
-      void Promise.all([import('firebase/auth'), import('./services/firebase')])
-        .then(([authSdk, firebaseService]) => firebaseService.firebaseAuth
-          ? authSdk.signOut(firebaseService.firebaseAuth)
-          : undefined)
-        .catch(() => setCloudError('Не удалось выйти из аккаунта. Проверьте подключение и попробуйте снова.'));
-      return;
-    }
-    if (supabase) {
-      void supabase.auth.signOut();
-      return;
-    }
-    setAdminPin(null);
-    localStorage.removeItem(ADMIN_STORAGE_KEY);
+    setGithubToken('');
+    setSavedGitHubToken(null);
   };
 
   const handleRetryCloudLoad = () => {
     setCloudError('');
-    if (useFirebase && !cloudUser) {
-      window.location.reload();
-      return;
-    }
-    if (useSupabase && cloudUser && !supabaseRole) {
-      setCloudRoleReady(false);
-      setAccessCheckAttempt((attempt) => attempt + 1);
-      return;
-    }
     setScheduleLoading(true);
     setScheduleReloadAttempt((attempt) => attempt + 1);
   };
 
-  const handleCloudSignIn = async (email: string, password: string) => {
-    if (useFirebase) {
-      const [authSdk, firebaseService] = await Promise.all([
-        import('firebase/auth'),
-        import('./services/firebase'),
-      ]);
-      if (!firebaseService.firebaseAuth) throw new Error('Firebase Auth is not configured.');
-      await authSdk.signInWithEmailAndPassword(firebaseService.firebaseAuth, email, password);
-      return;
-    }
-    if (!supabase) throw new Error('Облачный вход не настроен.');
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw error;
-  };
-
-  const handlePasswordReset = async (email: string) => {
-    if (useFirebase) {
-      const [authSdk, firebaseService] = await Promise.all([
-        import('firebase/auth'),
-        import('./services/firebase'),
-      ]);
-      if (!firebaseService.firebaseAuth) throw new Error('Firebase Auth is not configured.');
-      await authSdk.sendPasswordResetEmail(firebaseService.firebaseAuth, email);
-      return;
-    }
-    if (supabase) {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: window.location.href,
-      });
-      if (error) throw error;
-      return;
-    }
-    throw new Error('Облачный вход не настроен.');
-  };
-
-  const handleImportSchedule = async (importedLessons: Lesson[]) => {
-    if (!isAdmin) throw new Error('Только владелец может загрузить расписание.');
-    if (useFirebase) {
-      const [firestoreSdk, firebaseService] = await Promise.all([
-        import('firebase/firestore'),
-        import('./services/firebase'),
-      ]);
-      if (!firebaseService.firestore) throw new Error('Firebase Database is not configured.');
-      await firestoreSdk.setDoc(firestoreSdk.doc(firebaseService.firestore, 'schedules', 'current'), {
-        version: 1,
-        updatedAt: new Date().toISOString(),
-        lessons: importedLessons,
-      });
-      scheduleVersionRef.current = 1;
-      setScheduleVersion(1);
-      setLessons(importedLessons);
-      return;
-    }
-    if (supabase) {
-      const { error } = await supabase.from('schedules').insert({
-        id: 'current',
-        version: 1,
-        updated_at: new Date().toISOString(),
-        lessons: importedLessons,
-      });
-      if (error?.code === '23505') {
-        throw new Error('Расписание уже создали в другой вкладке. Обновите страницу и проверьте его.');
-      }
-      if (error) throw error;
-      setLessons(importedLessons);
-      scheduleVersionRef.current = 1;
-      setScheduleVersion(1);
-      setScheduleMissing(false);
-      return;
-    }
-    throw new Error('Облачное хранилище не настроено.');
-  };
-
   const handleExportBackup = () => {
-    if (!cloudConfigured || !isAdmin) return;
+    if (!isAdmin) return;
     const backup = {
       version: scheduleVersion,
       exportedAt: new Date().toISOString(),
@@ -624,68 +313,42 @@ export default function App() {
   };
 
   const handleRestoreBackup = async (restoredLessons: Lesson[]) => {
-    if (!isAdmin) throw new Error('Только владелец может восстановить расписание.');
-    if (useFirebase) {
-      const [firestoreSdk, firebaseService] = await Promise.all([
-        import('firebase/firestore'),
-        import('./services/firebase'),
-      ]);
-      if (!firebaseService.firestore) throw new Error('Firebase Database is not configured.');
-      const scheduleRef = firestoreSdk.doc(firebaseService.firestore, 'schedules', 'current');
-      const nextVersion = await firestoreSdk.runTransaction(firebaseService.firestore, async (transaction) => {
-        const snapshot = await transaction.get(scheduleRef);
-        if (!snapshot.exists()) throw new Error('Запись расписания не найдена.');
-        const version = Number(snapshot.data().version);
-        transaction.update(scheduleRef, {
-          lessons: restoredLessons,
-          version: version + 1,
-          updatedAt: new Date().toISOString(),
-        });
-        return version + 1;
-      });
-      if (nextVersion >= scheduleVersionRef.current) {
-        scheduleVersionRef.current = nextVersion;
-        setScheduleVersion(nextVersion);
-        setLessons(restoredLessons);
-      }
-      return;
+    if (!isAdmin || !githubToken || !accessCode) {
+      throw new Error('Только администратор может восстановить расписание.');
     }
-    if (supabase) {
-      const expectedVersion = scheduleVersionRef.current;
-      const nextVersion = expectedVersion + 1;
-      const { data, error } = await supabase
-        .from('schedules')
-        .update({ lessons: restoredLessons, version: nextVersion, updated_at: new Date().toISOString() })
-        .eq('id', 'current')
-        .eq('version', expectedVersion)
-        .select('version')
-        .maybeSingle();
-      if (error) throw error;
-      if (!data) throw new Error('Расписание изменилось в другом окне. Обновите страницу и повторите восстановление.');
-      const restoredVersion = Number(data.version);
-      if (Number.isFinite(restoredVersion) && restoredVersion >= scheduleVersionRef.current) {
-        setLessons(restoredLessons);
-        scheduleVersionRef.current = restoredVersion;
-        setScheduleVersion(restoredVersion);
-      }
-      return;
-    }
-    throw new Error('Облачное хранилище не настроено.');
+    const { version, sha } = await saveEncryptedSchedule(
+      restoredLessons,
+      accessCode,
+      githubToken,
+      scheduleVersionRef.current,
+      scheduleShaRef.current
+    );
+    scheduleVersionRef.current = version;
+    scheduleShaRef.current = sha;
+    setScheduleVersion(version);
+    setLessons(restoredLessons);
   };
 
   const handleChangePin = async (currentPin: string, newPin: string): Promise<boolean> => {
+    if (!isAdmin || !githubToken) return false;
+    if (currentPin.trim() !== accessCode.trim()) return false;
+    const normalizedNew = newPin.trim();
+    if (!normalizedNew) return false;
+
     try {
-      const res = await fetch('/api/change-pin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ currentPin, newPin }),
-      });
-      if (res.ok) {
-        setAdminPin(newPin);
-        localStorage.setItem(ADMIN_STORAGE_KEY, newPin);
-        return true;
-      }
-      return false;
+      const { version, sha } = await saveEncryptedSchedule(
+        lessons,
+        normalizedNew,
+        githubToken,
+        scheduleVersionRef.current,
+        scheduleShaRef.current
+      );
+      scheduleVersionRef.current = version;
+      scheduleShaRef.current = sha;
+      setScheduleVersion(version);
+      setAccessCode(normalizedNew);
+      setSavedAccessCode(normalizedNew);
+      return true;
     } catch {
       return false;
     }
@@ -716,14 +379,14 @@ export default function App() {
   const handleDelete = (id: string) => {
     if (!confirm('Удалить урок?')) return;
     const updated = lessons.filter((l) => l.id !== id);
-    saveLessons(updated);
+    void saveLessons(updated);
   };
 
   const handleSaveLesson = (lesson: Lesson, replaceLessonId?: string): Promise<boolean> => {
     let updated: Lesson[] = [...lessons];
 
     if (replaceLessonId) {
-      updated = updated.filter(l => l.id !== replaceLessonId);
+      updated = updated.filter((l) => l.id !== replaceLessonId);
       updated.push(lesson);
     } else {
       const existsIndex = updated.findIndex((l) => l.id === lesson.id);
@@ -827,76 +490,55 @@ export default function App() {
       return timeToMinutes(a.lesson.startTime) - timeToMinutes(b.lesson.startTime);
     });
 
-  const activeDayInfo = weekDays.find(d => d.key === activeDay);
+  const activeDayInfo = weekDays.find((d) => d.key === activeDay);
 
-  if (import.meta.env.PROD && !cloudConfigured) {
+  if (!accessCode) {
+    return (
+      <ScheduleLockScreen
+        isDark={isDark}
+        errorMessage={lockError}
+        onUnlock={handleUnlock}
+      />
+    );
+  }
+
+  if (scheduleLoading) {
+    return (
+      <main className={`min-h-screen flex items-center justify-center p-6 ${isDark ? 'bg-neutral-950 text-white' : 'bg-[#f5f6f8] text-neutral-900'}`}>
+        <div role="status" className="flex items-center gap-3 text-sm font-medium">
+          <span aria-hidden="true" className="h-5 w-5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+          <span>Загружаю расписание…</span>
+        </div>
+      </main>
+    );
+  }
+
+  if (cloudError) {
     return (
       <main className={`min-h-screen flex items-center justify-center p-5 ${isDark ? 'bg-neutral-950 text-white' : 'bg-[#f5f6f8] text-neutral-900'}`}>
         <section className={`max-w-md rounded-3xl p-6 shadow-xl ${isDark ? 'bg-neutral-900' : 'bg-white'}`}>
-          <h1 className="font-display font-bold text-lg">Приложение не настроено</h1>
-          <p className="mt-2 text-sm leading-relaxed">Для безопасной публикации настройте Supabase-параметры и политики доступа. Демонстрационное расписание не будет опубликовано.</p>
+          <h1 className="font-display font-bold text-lg">Не удалось открыть расписание</h1>
+          <p className="mt-2 text-sm text-rose-500">{cloudError}</p>
+          <div className="mt-5 flex gap-2">
+            <button onClick={handleRetryCloudLoad} className={`flex-1 rounded-xl px-4 py-3 text-sm font-semibold ${isDark ? 'bg-white text-neutral-900' : 'bg-neutral-900 text-white'}`}>Попробовать снова</button>
+            <button
+              onClick={() => {
+                setSavedAccessCode(null);
+                setAccessCode('');
+                setCloudError('');
+              }}
+              className={`rounded-xl px-4 py-3 text-sm font-semibold ${isDark ? 'bg-neutral-800 text-neutral-200' : 'bg-neutral-100 text-neutral-700'}`}
+            >
+              Сменить код
+            </button>
+          </div>
         </section>
       </main>
     );
   }
 
-  if (cloudConfigured) {
-    if (!cloudAuthReady) {
-      return <main className={`min-h-screen flex items-center justify-center ${isDark ? 'bg-neutral-950 text-white' : 'bg-[#f5f6f8] text-neutral-900'}`}>Проверяю вход…</main>;
-    }
-    if (!cloudUser && !cloudError) {
-      return <CloudLogin isDark={isDark} onSignIn={handleCloudSignIn} onResetPassword={useFirebase ? handlePasswordReset : undefined} />;
-    }
-    if (!cloudRoleReady) {
-      return (
-        <main className={`min-h-screen flex items-center justify-center p-6 ${isDark ? 'bg-neutral-950 text-white' : 'bg-[#f5f6f8] text-neutral-900'}`}>
-          <div role="status" className="flex flex-col items-center gap-3 text-center">
-            <span aria-hidden="true" className="h-6 w-6 animate-spin rounded-full border-2 border-current border-t-transparent" />
-            <span className="text-sm font-medium">Проверяю права доступа…</span>
-            <span className={`max-w-xs text-xs ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>Если проверка не завершится, появится возможность попробовать снова.</span>
-          </div>
-        </main>
-      );
-    }
-    if (scheduleLoading) {
-      return (
-        <main className={`min-h-screen flex items-center justify-center p-6 ${isDark ? 'bg-neutral-950 text-white' : 'bg-[#f5f6f8] text-neutral-900'}`}>
-          <div role="status" className="flex items-center gap-3 text-sm font-medium">
-            <span aria-hidden="true" className="h-5 w-5 animate-spin rounded-full border-2 border-current border-t-transparent" />
-            <span>Загружаю расписание…</span>
-          </div>
-        </main>
-      );
-    }
-    if (cloudError) {
-      return (
-        <main className={`min-h-screen flex items-center justify-center p-5 ${isDark ? 'bg-neutral-950 text-white' : 'bg-[#f5f6f8] text-neutral-900'}`}>
-          <section className={`max-w-md rounded-3xl p-6 shadow-xl ${isDark ? 'bg-neutral-900' : 'bg-white'}`}>
-            <h1 className="font-display font-bold text-lg">Не удалось открыть расписание</h1>
-            <p className="mt-2 text-sm text-rose-500">{cloudError}</p>
-            <div className="mt-5 flex gap-2">
-              <button onClick={handleRetryCloudLoad} className={`flex-1 rounded-xl px-4 py-3 text-sm font-semibold ${isDark ? 'bg-white text-neutral-900' : 'bg-neutral-900 text-white'}`}>Попробовать снова</button>
-              {cloudUser && <button onClick={handleLogout} className={`rounded-xl px-4 py-3 text-sm font-semibold ${isDark ? 'bg-neutral-800 text-neutral-200' : 'bg-neutral-100 text-neutral-700'}`}>Выйти</button>}
-            </div>
-          </section>
-        </main>
-      );
-    }
-    if (scheduleMissing) {
-      return (
-        <CloudScheduleSetup
-          isDark={isDark}
-          isEditor={isAdmin}
-          onCreateEmpty={() => handleImportSchedule([])}
-          onImport={handleImportSchedule}
-          onLogout={handleLogout}
-        />
-      );
-    }
-  }
-
   return (
-    <div 
+    <div
       className={`min-h-screen pb-32 select-none transition-colors duration-200 ${
         isDark ? 'bg-neutral-950 text-white' : 'bg-[#f5f6f8] text-neutral-900'
       }`}
@@ -920,7 +562,7 @@ export default function App() {
               {/* Prev / Next week switches */}
               <div className={`flex items-center ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>
                 <button
-                  onClick={() => setWeekOffset(w => w - 1)}
+                  onClick={() => setWeekOffset((w) => w - 1)}
                   className={`p-1 rounded-lg transition-colors ${isDark ? 'hover:text-white hover:bg-neutral-800' : 'hover:text-neutral-900 hover:bg-neutral-200/60'}`}
                   title="Предыдущая неделя"
                 >
@@ -940,7 +582,7 @@ export default function App() {
                   </button>
                 )}
                 <button
-                  onClick={() => setWeekOffset(w => w + 1)}
+                  onClick={() => setWeekOffset((w) => w + 1)}
                   className={`p-1 rounded-lg transition-colors ${isDark ? 'hover:text-white hover:bg-neutral-800' : 'hover:text-neutral-900 hover:bg-neutral-200/60'}`}
                   title="Следующая неделя"
                 >
@@ -985,7 +627,6 @@ export default function App() {
           }`}>
             {weekDays.map((d) => {
               const isSelected = activeDay === d.key;
-              const count = weekOccurrences.filter((occurrence) => occurrence.day === d.key).length;
 
               return (
                 <button
@@ -998,24 +639,24 @@ export default function App() {
                   }`}
                 >
                   <span className={`text-[10px] font-bold tracking-wider leading-none ${
-                    isSelected 
+                    isSelected
                       ? isDark ? 'text-neutral-600' : 'text-neutral-300'
                       : isDark ? 'text-neutral-500' : 'text-neutral-400'
                   }`}>
                     {d.short}
                   </span>
-                  
+
                   <span className="text-base sm:text-lg font-display font-bold leading-tight">
                     {d.dayNumber}
                   </span>
 
                   {d.isToday && weekOffset === 0 && (
-                    <span 
+                    <span
                       className={`w-1.5 h-1.5 rounded-full ${
-                        isSelected 
+                        isSelected
                           ? isDark ? 'bg-emerald-600' : 'bg-emerald-400'
                           : 'bg-emerald-500'
-                      }`} 
+                      }`}
                       title="Сегодня"
                     />
                   )}
@@ -1085,8 +726,8 @@ export default function App() {
                       )}
 
                       <span className={`font-time font-bold text-[13px] tracking-wide ${
-                        isPastToday 
-                          ? isDark ? 'text-neutral-500' : 'text-neutral-400' 
+                        isPastToday
+                          ? isDark ? 'text-neutral-500' : 'text-neutral-400'
                           : isDark ? 'text-neutral-200' : 'text-neutral-800'
                       }`}>
                         {lesson.startTime} — {lesson.endTime}
@@ -1152,7 +793,7 @@ export default function App() {
                   {/* Subject & Teacher Name */}
                   <div className="mb-2.5">
                     <h2 className={`text-base font-display font-bold leading-snug tracking-tight ${
-                      isPastToday 
+                      isPastToday
                         ? isDark ? 'text-neutral-400' : 'text-neutral-500'
                         : isDark ? 'text-white' : 'text-neutral-900'
                     }`}>
@@ -1181,8 +822,8 @@ export default function App() {
                     <div
                       onClick={() => handleCopyHomework(lesson.id, lesson.homework!)}
                       className={`mb-3 px-3.5 py-2.5 rounded-2xl text-xs cursor-pointer active:scale-[0.99] transition-all flex items-start justify-between gap-2 border ${
-                        isDark 
-                          ? 'bg-neutral-800/80 hover:bg-neutral-800 text-neutral-200 border-neutral-700/60' 
+                        isDark
+                          ? 'bg-neutral-800/80 hover:bg-neutral-800 text-neutral-200 border-neutral-700/60'
                           : 'bg-neutral-50 hover:bg-neutral-100/70 text-neutral-800 border-neutral-100'
                       }`}
                       title="Нажмите, чтобы скопировать Д/З"
@@ -1280,7 +921,7 @@ export default function App() {
       />
 
       <PinModal
-        isOpen={!cloudConfigured && isPinModalOpen}
+        isOpen={isPinModalOpen}
         onClose={() => setIsPinModalOpen(false)}
         onSuccess={handleAdminSuccess}
         isDark={isDark}
@@ -1290,7 +931,6 @@ export default function App() {
         isOpen={isMenuOpen}
         onClose={() => setIsMenuOpen(false)}
         isAdmin={isAdmin}
-        isCloudMode={cloudConfigured}
         currentLessons={lessons}
         onExportBackup={handleExportBackup}
         onImportBackup={handleRestoreBackup}

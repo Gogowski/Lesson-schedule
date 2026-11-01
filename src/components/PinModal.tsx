@@ -1,51 +1,47 @@
 import React, { useState } from 'react';
 import { X, Lock } from 'lucide-react';
+import { verifyGitHubToken } from '../services/githubStorage';
 
 interface PinModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: (pin: string) => void;
+  onSuccess: (tokenOrPin: string) => void;
   isDark?: boolean;
 }
 
 export const PinModal: React.FC<PinModalProps> = ({ isOpen, onClose, onSuccess, isDark }) => {
-  const [pin, setPin] = useState('');
-  const [error, setError] = useState(false);
+  const [token, setToken] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
+  const [busy, setBusy] = useState(false);
 
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(false);
+    const trimmed = token.trim();
+    if (!trimmed) return;
+    setErrorMessage('');
+    setBusy(true);
 
     try {
-      const res = await fetch('/api/verify-pin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin: pin.trim() }),
-      });
-
-      if (res.ok) {
-        onSuccess(pin.trim());
-        setPin('');
+      const ok = await verifyGitHubToken(trimmed);
+      if (ok) {
+        onSuccess(trimmed);
+        setToken('');
         onClose();
       } else {
-        setError(true);
+        setErrorMessage('Токен не подошёл или у него нет прав на запись в репозиторий.');
       }
     } catch {
-      if (pin.trim() === '1234') {
-        onSuccess(pin.trim());
-        setPin('');
-        onClose();
-      } else {
-        setError(true);
-      }
+      setErrorMessage('Не удалось проверить токен. Проверьте интернет.');
+    } finally {
+      setBusy(false);
     }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
-      <div 
+      <div
         className={`w-full sm:max-w-xs rounded-t-[28px] sm:rounded-3xl p-5 shadow-2xl pb-safe transition-colors ${
           isDark ? 'bg-neutral-900 text-white' : 'bg-white text-neutral-900'
         }`}
@@ -58,7 +54,7 @@ export const PinModal: React.FC<PinModalProps> = ({ isOpen, onClose, onSuccess, 
             <div className={`p-1.5 rounded-lg ${isDark ? 'bg-neutral-800 text-white' : 'bg-neutral-100 text-neutral-800'}`}>
               <Lock className="w-4 h-4" />
             </div>
-            <span className="text-sm font-bold">Управление расписанием</span>
+            <span className="text-sm font-bold">Режим администратора</span>
           </div>
           <button
             onClick={onClose}
@@ -74,37 +70,40 @@ export const PinModal: React.FC<PinModalProps> = ({ isOpen, onClose, onSuccess, 
           <div>
             <input
               type="password"
-              inputMode="numeric"
               autoFocus
-              value={pin}
+              value={token}
               onChange={(e) => {
-                setPin(e.target.value);
-                setError(false);
+                setToken(e.target.value);
+                setErrorMessage('');
               }}
-              placeholder="PIN (1234)"
-              className={`w-full text-center py-3.5 px-3 rounded-xl text-xl tracking-widest font-mono focus:outline-none focus:ring-2 ${
-                isDark 
-                  ? 'bg-neutral-800 text-white focus:ring-white' 
+              placeholder="GitHub Token (ghp_...)"
+              className={`w-full text-center py-3.5 px-3 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 ${
+                isDark
+                  ? 'bg-neutral-800 text-white focus:ring-white'
                   : 'bg-neutral-100 text-neutral-900 focus:ring-neutral-900'
               }`}
             />
+            <p className={`mt-1.5 text-[11px] text-center ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
+              Токен сохраняется только в вашем браузере для сохранения уроков в GitHub
+            </p>
           </div>
 
-          {error && (
+          {errorMessage && (
             <p className="text-center text-xs text-rose-500 font-semibold">
-              Неверный PIN
+              {errorMessage}
             </p>
           )}
 
           <button
             type="submit"
-            className={`w-full py-3.5 active:scale-[0.98] text-sm font-semibold rounded-xl transition-all shadow-xs ${
-              isDark 
-                ? 'bg-white text-neutral-900 hover:bg-neutral-200' 
+            disabled={busy || !token.trim()}
+            className={`w-full py-3.5 active:scale-[0.98] text-sm font-semibold rounded-xl transition-all shadow-xs disabled:opacity-60 ${
+              isDark
+                ? 'bg-white text-neutral-900 hover:bg-neutral-200'
                 : 'bg-neutral-900 text-white hover:bg-neutral-800'
             }`}
           >
-            Войти
+            {busy ? 'Проверяю токен…' : 'Войти'}
           </button>
         </form>
       </div>
