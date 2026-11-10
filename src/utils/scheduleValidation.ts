@@ -1,19 +1,18 @@
 import { DayKey, Lesson, LessonRepeatFrequency, LessonStatus } from '../types';
-import { dayKeyForDate } from './recurrence';
 import { parseLocalDate } from './timeUtils';
 
 const VALID_DAYS = new Set<DayKey>(['mon', 'tue', 'wed', 'thu', 'fri']);
 const VALID_STATUSES = new Set<LessonStatus>(['scheduled', 'rescheduled', 'cancelled']);
 const VALID_FREQUENCIES = new Set<LessonRepeatFrequency>(['weekly', 'biweekly', 'monthly']);
 
-function isValidRecurrence(value: unknown, lessonDay: DayKey): boolean {
+function isValidRecurrence(value: unknown): boolean {
   if (value === undefined) return true;
   if (!value || typeof value !== 'object') return false;
   const recurrence = value as Record<string, unknown>;
   if (typeof recurrence.frequency !== 'string' || !VALID_FREQUENCIES.has(recurrence.frequency as LessonRepeatFrequency)) return false;
   if (typeof recurrence.startDate !== 'string') return false;
   const startDate = parseLocalDate(recurrence.startDate);
-  return Boolean(startDate && dayKeyForDate(startDate) === lessonDay);
+  return Boolean(startDate);
 }
 
 export function isLessons(value: unknown): value is Lesson[] {
@@ -33,7 +32,7 @@ export function isLessons(value: unknown): value is Lesson[] {
       && typeof lesson.subject === 'string'
       && typeof lesson.teacherName === 'string'
       && (lesson.isFlexible === undefined || typeof lesson.isFlexible === 'boolean')
-      && isValidRecurrence(lesson.recurrence, lesson.day as DayKey)
+      && isValidRecurrence(lesson.recurrence)
       && (lesson.status === undefined || (typeof lesson.status === 'string' && VALID_STATUSES.has(lesson.status as LessonStatus)))
       && (lesson.statusNote === undefined || typeof lesson.statusNote === 'string')
       && (lesson.meetingUrl === undefined || typeof lesson.meetingUrl === 'string')

@@ -26,6 +26,16 @@ function monthlyWeekdayDate(anchor: Date, year: number, month: number): number |
   return occurrence <= new Date(year, month + 1, 0, 12).getDate() ? occurrence : null;
 }
 
+export function getDateForDayInWeek(referenceDate: Date, day: DayKey): string {
+  const mondayDistance = referenceDate.getDay() === 0 ? -6 : 1 - referenceDate.getDay();
+  const monday = new Date(referenceDate);
+  monday.setDate(referenceDate.getDate() + mondayDistance);
+  const dayOffset: Record<DayKey, number> = { mon: 0, tue: 1, wed: 2, thu: 3, fri: 4 };
+  const target = new Date(monday);
+  target.setDate(monday.getDate() + dayOffset[day]);
+  return formatLocalDate(target);
+}
+
 /** Returns true when this lesson has an occurrence on the given local calendar date. */
 export function isLessonScheduledOnDate(lesson: Lesson, date: Date): boolean {
   const dateDay = dayKeyForDate(date);
@@ -34,8 +44,15 @@ export function isLessonScheduledOnDate(lesson: Lesson, date: Date): boolean {
   const recurrence = lesson.recurrence;
   if (!recurrence) return lesson.day === dateDay;
 
-  const startDate = parseLocalDate(recurrence.startDate);
-  if (!startDate || formatLocalDate(date) < recurrence.startDate) return false;
+  const rawStartDate = parseLocalDate(recurrence.startDate);
+  if (!rawStartDate) return false;
+
+  const alignedStartISO =
+    dayKeyForDate(rawStartDate) === lesson.day
+      ? recurrence.startDate
+      : getDateForDayInWeek(rawStartDate, lesson.day);
+  const startDate = parseLocalDate(alignedStartISO);
+  if (!startDate || formatLocalDate(date) < alignedStartISO) return false;
 
   if (recurrence.frequency === 'weekly') return lesson.day === dateDay;
   if (recurrence.frequency === 'biweekly') {
@@ -50,15 +67,6 @@ export function isLessonScheduledOnDate(lesson: Lesson, date: Date): boolean {
   }
 
   return false;
-}
-
-export function getDateForDayInWeek(referenceDate: Date, day: DayKey): string {
-  const mondayDistance = referenceDate.getDay() === 0 ? -6 : 1 - referenceDate.getDay();
-  const monday = new Date(referenceDate);
-  monday.setDate(referenceDate.getDate() + mondayDistance);
-  const dayOffset: Record<DayKey, number> = { mon: 0, tue: 1, wed: 2, thu: 3, fri: 4 };
-  monday.setDate(monday.getDate() + dayOffset[day]);
-  return formatLocalDate(monday);
 }
 
 export function getWeekdayOrdinal(dateValue: string): number | null {
