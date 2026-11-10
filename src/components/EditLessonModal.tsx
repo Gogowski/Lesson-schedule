@@ -178,7 +178,7 @@ export const EditLessonModal: React.FC<EditLessonModalProps> = ({
           isFlexible,
           recurrence: repeatFrequency === 'weekly'
             ? undefined
-            : { frequency: repeatFrequency, startDate: firstLessonDate },
+            : { frequency: repeatFrequency, startDate: (parseLocalDate(firstLessonDate) ? getDateForDayInWeek(parseLocalDate(firstLessonDate)!, day) : firstLessonDate) },
           homework: homework.trim() || undefined,
           statusNote: statusNote.trim() || undefined,
         },
